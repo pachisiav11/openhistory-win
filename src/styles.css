@@ -1,0 +1,155 @@
+:root {
+  --bg: #0b0b12;
+  --panel: #13131f;
+  --panel-2: #1a1a29;
+  --line: #262638;
+  --text: #e8e8f2;
+  --muted: #8b8ba6;
+  --accent: #7c6bf7;
+  --accent-dim: #4f46e5;
+  --ok: #4ade80;
+
+  color-scheme: dark;
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(120% 90% at 50% -10%, #1c1a35 0%, var(--bg) 55%);
+  color: var(--text);
+}
+
+.shell {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 72px 28px 48px;
+}
+
+.shell__head {
+  margin-bottom: 36px;
+}
+
+.shell__title {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.shell__sub {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.notice {
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 0.875rem;
+  margin-bottom: 20px;
+}
+
+.notice--error {
+  background: #2a1620;
+  border: 1px solid #5a2740;
+  color: #f7a8b8;
+}
+
+.phases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.phase {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.phase:last-child {
+  border-bottom: none;
+}
+
+.phase__n {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.phase__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.phase__name {
+  font-size: 0.95rem;
+  font-weight: 550;
+}
+
+.phase__detail {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.phase__state {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.phase--active {
+  background: linear-gradient(90deg, rgba(124, 107, 247, 0.14), transparent 70%);
+}
+
+.phase--active .phase__n {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.phase--active .phase__state {
+  color: var(--accent);
+}
+
+.phase--done .phase__n {
+  background: rgba(74, 222, 128, 0.14);
+  border-color: rgba(74, 222, 128, 0.4);
+  color: var(--ok);
+}
+
+.phase--done .phase__state {
+  color: var(--ok);
+}
+
+.shell__foot {
+  margin-top: 28px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}

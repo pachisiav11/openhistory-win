@@ -1,0 +1,39 @@
+# Rust
+/target
+**/target
+Cargo.lock.orig
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+*.key
+
+# Local model files (multi-GB, never committed)
+models/
+*.gguf
+resources/llama-server.exe
+resources/llama-server/
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test output
+/test-output
+*.jsonl.tmp
