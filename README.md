@@ -18,8 +18,8 @@ flight and [`TODO_log.md`](TODO_log.md) for what has landed.
 
 | Phase | Scope | State |
 |-------|-------|-------|
-| 0 | Repository, workspace scaffold, CI | in progress |
-| 1 | Native activity collector | pending |
+| 0 | Repository, workspace scaffold, CI | done |
+| 1 | Native activity collector | done |
 | 2 | Tauri shell, JSONL persistence | pending |
 | 3 | Episode detection, rollups, search index | pending |
 | 4 | Inference: Anthropic and local llama.cpp | pending |
@@ -61,6 +61,9 @@ The app reads window titles and browser URLs, so it treats that data carefully b
 default.
 
 - Private and incognito browser windows emit a `privacyBoundary` event and nothing else.
+  Detection reads the accessibility tree, not the window title, because current Chrome
+  no longer marks an incognito window in its title at all. A browser window the app
+  cannot inspect is treated as private rather than assumed safe.
 - Password fields are never read; UIAutomation reports them and they are skipped.
 - Password managers are excluded out of the box, and you can exclude any application.
 - No activity data leaves the machine until you turn on a cloud provider and confirm it.
@@ -103,6 +106,20 @@ Release build:
 
 ```bash
 cargo tauri build
+```
+
+## Testing
+
+```bash
+cargo test --workspace
+```
+
+Some collector tests are `#[ignore]`d because they open real windows and need an
+interactive desktop — including the one that launches every installed browser in
+private mode and asserts nothing about it is recorded. Run those deliberately:
+
+```bash
+cargo test -p oh-collector --test live_desktop -- --ignored --test-threads=1
 ```
 
 ## Documentation

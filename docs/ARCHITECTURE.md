@@ -160,8 +160,49 @@ be automated, it is written down as an explicit gap rather than quietly assumed.
   machine, so the handler is exercised by dispatching synthetic `WM_WTSSESSION_CHANGE`
   messages to the collector's message window instead.
 - Screen sleep and wake, for the same reason, via synthetic `WM_POWERBROADCAST`.
-- Per-browser URL extraction beyond whichever browsers are installed on the build
-  machine.
+- Per-browser URL extraction and private-window detection beyond whichever browsers
+  are installed on the build machine. Chrome and Edge are verified live; Firefox,
+  Brave, Opera, Vivaldi and Arc carry markers derived from documentation rather than
+  from observation, and AD-8 explains why that distinction matters.
 - Visual inspection of the rendered application window. The React views are driven
   headlessly against a mocked Tauri IPC layer, which verifies behaviour but not
   appearance.
+
+---
+
+## AD-8: Private browsing is detected from the accessibility tree, not the window title
+
+**Decision.** A browser window is classified as private by reading its UIAutomation
+accessible name — the window's own name plus the names of its immediate children — and
+matching a per-browser marker against those. The Win32 title is still checked first as
+a cheap fast path, but it is not the source of truth. When UIAutomation is unavailable
+for a window, the browser is classified `Undetermined`, and an `Undetermined` browser
+window is treated as private: the application is recorded, the title and URL are not.
+
+**Why.** The original plan specified matching `" - Google Chrome (Incognito)"` against
+the window title. That heuristic is obsolete. Current Chrome titles an incognito window
+exactly as it titles an ordinary one — an incognito window on `about:blank` is titled
+`about:blank - Google Chrome`, with no marker anywhere in the Win32 title. A
+title-matching implementation therefore records private browsing in full while
+appearing to work, which is the worst possible failure mode for the guarantee in AD-4.
+
+The marker does still exist in the accessibility tree. Chrome's `BrowserRootView`
+child element carries the accessible name `about:blank - Google Chrome (Incognito)`.
+Edge publishes the marker in both places: its Win32 title reads
+`about:blank - [InPrivate] - Microsoft Edge` and its root view reads
+`about:blank - Microsoft Edge (InPrivate)`.
+
+**Consequence.** Private-window detection now depends on a service that can fail.
+Elevated windows and applications that refuse automation return nothing, so the
+`Undetermined` state exists to make that failure fail closed. The cost is that a
+browser window we cannot inspect is recorded with less detail than it could be; the
+alternative is recording a private session in full, which is not a trade worth making.
+
+**How this is held.** `private_browsing_records_nothing_but_the_boundary` in
+`crates/oh-collector/tests/live_desktop.rs` launches every supported browser installed
+on the machine in its private mode, against a throwaway profile, and asserts that the
+stream contains a `privacyBoundary` and nothing else attributable to that process. It
+is a live test because no unit test over title strings could have caught this — the
+strings the unit test would assert on are the ones that turned out to be wrong.
+Browser vendors change these trees, so `cargo run -p oh-collector --example uia_dump`
+is kept in the repository to re-derive them.
