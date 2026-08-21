@@ -73,6 +73,37 @@ enum Privacy {
     Undetermined,
 }
 
+/// Window classes that belong to the Windows shell rather than to an application the
+/// user is working in.
+///
+/// These take the foreground constantly — Alt-Tab, Task View, the Start menu, the
+/// taskbar — and every one of them is owned by `explorer.exe` or another shell host,
+/// so a process-level exclusion would silently drop real File Explorer windows too.
+/// The class name is the only thing that separates them.
+const SHELL_SURFACE_CLASSES: &[&str] = &[
+    "TaskSwitcherWnd",
+    "TaskSwitcherOverlayWnd",
+    "MultitaskingViewFrame",
+    "XamlExplorerHostIslandWindow",
+    "Windows.UI.Core.CoreWindow",
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "ForegroundStaging",
+    "WorkerW",
+    "Progman",
+];
+
+/// True when a window is shell chrome rather than something the user was using.
+fn is_shell_surface(hwnd: HWND) -> bool {
+    win::window_class(hwnd).is_some_and(|class| class_is_shell_surface(&class))
+}
+
+fn class_is_shell_surface(class: &str) -> bool {
+    SHELL_SURFACE_CLASSES
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(class))
+}
+
 struct CollectorState {
     sink: EventSink,
     automation: Option<Automation>,
@@ -162,6 +193,9 @@ impl CollectorState {
     }
 
     fn handle_foreground(&mut self, hwnd: HWND) {
+        if is_shell_surface(hwnd) {
+            return;
+        }
         self.close_previous_application();
 
         let Some((application, stem)) = self.describe(hwnd) else {
@@ -189,7 +223,7 @@ impl CollectorState {
 
     fn handle_title_change(&mut self, hwnd: HWND) {
         // Only the foreground window matters; background windows retitle constantly.
-        if win::foreground_window() != Some(hwnd) {
+        if win::foreground_window() != Some(hwnd) || is_shell_surface(hwnd) {
             return;
         }
 
@@ -617,4 +651,45 @@ fn cleanup(
         let _ = unsafe { WTSUnRegisterSessionNotification(window) };
     }
     let _ = unsafe { DestroyWindow(window) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_chrome_is_not_an_application() {
+        // Alt-Tab, Task View, the Start menu and the taskbar all report themselves as
+        // explorer.exe, so the class name is what keeps them out of the timeline.
+        for class in [
+            "TaskSwitcherWnd",
+            "MultitaskingViewFrame",
+            "Windows.UI.Core.CoreWindow",
+            "Shell_TrayWnd",
+            "Progman",
+        ] {
+            assert!(class_is_shell_surface(class), "{class} must be filtered");
+        }
+    }
+
+    #[test]
+    fn real_windows_are_left_alone() {
+        // CabinetWClass is File Explorer proper, which is a real application window
+        // owned by the same process as the shell chrome above.
+        for class in [
+            "CabinetWClass",
+            "Chrome_WidgetWin_1",
+            "MozillaWindowClass",
+            "#32770",
+            "ApplicationFrameWindow",
+        ] {
+            assert!(!class_is_shell_surface(class), "{class} must be recorded");
+        }
+    }
+
+    #[test]
+    fn class_matching_ignores_case() {
+        assert!(class_is_shell_surface("taskswitcherwnd"));
+        assert!(class_is_shell_surface("SHELL_TRAYWND"));
+    }
 }

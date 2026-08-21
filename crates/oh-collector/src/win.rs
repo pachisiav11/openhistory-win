@@ -17,7 +17,8 @@ use windows::Win32::System::Threading::{
     PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    GetClassNameW, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId,
 };
 use windows::core::{HSTRING, PCWSTR, PWSTR};
 
@@ -62,6 +63,17 @@ pub fn window_title(hwnd: HWND) -> Option<String> {
 
     let title = wide_to_string(&buffer[..written as usize]);
     (!title.trim().is_empty()).then_some(title)
+}
+
+/// A window's registered class name.
+///
+/// Class names are the only reliable way to tell one of Explorer's transient shell
+/// surfaces from a real application window, because both report the same process.
+pub fn window_class(hwnd: HWND) -> Option<String> {
+    // 256 is the maximum length `RegisterClass` accepts, so no class name is longer.
+    let mut buffer = [0u16; 256];
+    let written = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    (written > 0).then(|| wide_to_string(&buffer[..written as usize]))
 }
 
 /// Process that owns a window.

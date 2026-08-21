@@ -165,8 +165,11 @@ be automated, it is written down as an explicit gap rather than quietly assumed.
   Brave, Opera, Vivaldi and Arc carry markers derived from documentation rather than
   from observation, and AD-8 explains why that distinction matters.
 - Visual inspection of the rendered application window. The React views are driven
-  headlessly against a mocked Tauri IPC layer, which verifies behaviour but not
-  appearance.
+  headlessly against a mocked Tauri IPC layer and exercised in a real browser, which
+  verifies behaviour and the accessibility tree but not appearance. Screenshots of the
+  preview pane were not available in the environment this was built in.
+- Clicking the tray icon and its menu. The tray is built and its handlers are ordinary
+  functions, but no automated test drives a shell notification area.
 
 ---
 
@@ -206,3 +209,59 @@ is a live test because no unit test over title strings could have caught this �
 strings the unit test would assert on are the ones that turned out to be wrong.
 Browser vendors change these trees, so `cargo run -p oh-collector --example uia_dump`
 is kept in the repository to re-derive them.
+
+---
+
+## AD-9: History is append-only JSON Lines, cut on the local date
+
+**Decision.** Events are appended to `events/YYYY-MM-DD.jsonl`, one JSON object per
+line, flushed on every append. Nothing is ever rewritten in place. The day boundary is
+the user's local date, not UTC. Retention defaults to keeping everything.
+
+**Why.** Append-only is the failure mode that matters here: the process is expected to
+be killed at shutdown rather than closed politely, and a crash mid-write can then cost
+at most the event being written. A database would have to be opened, migrated,
+compacted and repaired; a text log can be read with any tool the user already has, and
+that transparency is worth more than query speed for a file this small. Flushing every
+append costs nothing measurable at a few events a minute, and it means what is on disk
+is what happened.
+
+The local date matters because history is read as "what did I do yesterday". A UTC cut
+would split an evening's work across two files for most of the world.
+
+Retention defaults to unlimited because a personal history that silently deletes itself
+is not one you can rely on. `prune` treats a retention of zero as "keep everything", so
+a misconfigured setting cannot erase the archive.
+
+**Consequence.** Reading a day is a linear scan. That is fine at this scale — a heavy
+day is a few thousand lines — and Phase 3's episode files and search index exist so
+that nothing downstream has to scan the raw log repeatedly.
+
+**Threading.** The collector's callback runs on the same thread as its message loop and
+WinEvent hook, so it must never block. The sink does nothing but hand the event to a
+dedicated writer thread over a channel; the writer owns the store and is the only thing
+that touches it. Stopping the service stops the collector first, then drops the sender
+and joins the writer, so every observed event is on disk before `stop` returns.
+
+---
+
+## AD-10: The Windows shell is not an application
+
+**Decision.** Windows whose class is one of a known set of shell surfaces — Alt-Tab
+(`TaskSwitcherWnd`), Task View (`MultitaskingViewFrame`), the Start menu and search
+(`Windows.UI.Core.CoreWindow`), the taskbar (`Shell_TrayWnd`), the desktop (`Progman`,
+`WorkerW`) — are never reported as activity.
+
+**Why.** These take the foreground constantly. Running the real application against a
+live desktop produced a log where a third of the entries were `Task Switching` and
+bare `Windows Explorer` activations from tapping Alt-Tab, which is noise the user did
+not do and would have to read past on every timeline.
+
+They cannot be excluded by process, because they are owned by `explorer.exe` — the same
+process as a genuine File Explorer window, which is real activity. The window class is
+the only thing that separates them.
+
+**Consequence.** The list is empirical and will need additions as Windows changes its
+shell. That is why it is a named constant with its own tests rather than an inline
+match, and why `CabinetWClass` is in the tests as an explicit example of what must
+still be recorded.

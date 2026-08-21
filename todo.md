@@ -1,4 +1,3 @@
-- 2026-08-21 21:51: Phase 2 — Tauri v2 shell wiring collector to JSONL in %APPDATA%\openhistory-win
 - 2026-08-21 21:51: Phase 3 — Processing layer (episode detection, hourly/daily rollup, search index)
 - 2026-08-21 21:51: Phase 4 — Inference layer (Anthropic opt-in + app-managed llama-server, curated model catalog, on-demand load/unload)
 - 2026-08-21 21:51: Phase 5 — MCP server (127.0.0.1:47123, bearer token auth, sanitization)

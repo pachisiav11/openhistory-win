@@ -1,3 +1,4 @@
 - Added: 2026-08-21 00:00 | Completed: 2026-08-21 15:30 | Consolidate todo.md, tauri-llm-guide.md, build-plan.md into CONSOLIDATED.md with full architecture and test gates
 - Added: 2026-08-21 21:51 | Completed: 2026-08-21 22:06 | Phase 0 — Public repo openhistory-win, Cargo workspace + Vite/React scaffold, CI, docs, LICENSE
 - Added: 2026-08-21 21:51 | Completed: 2026-08-21 23:40 | Phase 1 — Rust activity collector (SetWinEventHook, UIAutomation, power/session events, ActivityEvent schema)
+- Added: 2026-08-21 21:51 | Completed: 2026-08-22 00:35 | Phase 2 — Tauri v2 shell wiring collector to JSONL in %APPDATA%\openhistory-win

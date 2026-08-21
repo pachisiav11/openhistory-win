@@ -20,7 +20,7 @@ flight and [`TODO_log.md`](TODO_log.md) for what has landed.
 |-------|-------|-------|
 | 0 | Repository, workspace scaffold, CI | done |
 | 1 | Native activity collector | done |
-| 2 | Tauri shell, JSONL persistence | pending |
+| 2 | Tauri shell, JSONL persistence | done |
 | 3 | Episode detection, rollups, search index | pending |
 | 4 | Inference: Anthropic and local llama.cpp | pending |
 | 5 | Local MCP server | pending |
@@ -70,6 +70,26 @@ default.
 - Local summarization runs entirely offline once a model is downloaded.
 - MCP responses expose summaries, never raw event streams.
 
+## Where your history lives
+
+Everything is plain text under `%APPDATA%\openhistory-win`:
+
+```
+config.json                    settings, safe to edit by hand
+events/2026-08-21.jsonl        one JSON object per line, append-only
+episodes/                      grouped activity          (phase 3)
+summaries/                     hourly and daily writing  (phase 4)
+index/                         search index              (phase 3)
+models/                        downloaded GGUF files     (phase 4)
+```
+
+Event logs are cut on your local date and never rewritten, so a crash can cost at most
+the event being written. Nothing is compressed or encoded — `type` and `jq` both work.
+Set `OPENHISTORY_DATA_DIR` to put the whole tree somewhere else.
+
+Closing the window leaves the app recording in the tray. Quit from the tray menu to
+stop it entirely.
+
 ## Local models
 
 Local inference is opt-in and downloads nothing until you pick a model. When a summary
@@ -114,12 +134,21 @@ cargo tauri build
 cargo test --workspace
 ```
 
-Some collector tests are `#[ignore]`d because they open real windows and need an
-interactive desktop — including the one that launches every installed browser in
-private mode and asserts nothing about it is recorded. Run those deliberately:
+```bash
+npm test
+```
+
+Some tests are `#[ignore]`d because they open real windows and need an interactive
+desktop — including the one that launches every installed browser in private mode and
+asserts nothing about it is recorded, and the one that records a real session and reads
+it back off disk. Run those deliberately:
 
 ```bash
 cargo test -p oh-collector --test live_desktop -- --ignored --test-threads=1
+```
+
+```bash
+cargo test -p openhistory-win --test persistence -- --ignored --test-threads=1
 ```
 
 ## Documentation
