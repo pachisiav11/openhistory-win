@@ -134,6 +134,86 @@ export interface ActivityEvent {
   isSensitive?: boolean;
 }
 
+/**
+ * A stretch of continuous work in one application.
+ *
+ * `durationMs` is wall-clock from first event to last; `activeMs` is the part of it
+ * there is evidence for. Measurements use `activeMs`.
+ */
+export interface Episode {
+  id: string;
+  date: string;
+  app: string;
+  appPath?: string;
+  title?: string;
+  titles?: string[];
+  urls?: string[];
+  start: string;
+  end: string;
+  durationMs: number;
+  activeMs: number;
+  eventCount: number;
+  isPrivate: boolean;
+}
+
+export interface AppUsage {
+  app: string;
+  activeMs: number;
+  episodes: number;
+}
+
+export interface HourlyRollup {
+  hour: number;
+  activeMs: number;
+  apps: AppUsage[];
+  episodeIds: string[];
+}
+
+export interface DailyRollup {
+  date: string;
+  activeMs: number;
+  episodes: number;
+  apps: AppUsage[];
+  hours: HourlyRollup[];
+  firstActivity?: string;
+  lastActivity?: string;
+  privateEpisodes: number;
+}
+
+export interface DayReport {
+  date: string;
+  episodes: Episode[];
+  rollup: DailyRollup;
+}
+
+/** One episode matched by a search, with how many query terms it matched. */
+export interface SearchHit {
+  id: string;
+  date: string;
+  app: string;
+  title?: string;
+  start: string;
+  end: string;
+  activeMs: number;
+  isPrivate: boolean;
+  matchedTerms: number;
+}
+
+/** Episodes and measurements for one local day, processed on demand. */
+export function dayReport(date: string = localDate()): Promise<DayReport> {
+  return invoke<DayReport>("day_report", { date });
+}
+
+/** Episodes matching every term in the query, most recent first. */
+export function searchHistory(query: string, limit = 50): Promise<SearchHit[]> {
+  return invoke<SearchHit[]>("search_history", { query, limit });
+}
+
+/** Discard everything derived and rebuild it from the event log. */
+export function rebuildHistory(): Promise<string[]> {
+  return invoke<string[]>("rebuild_history");
+}
+
 /** The local date, formatted the way the backend partitions its logs. */
 export function localDate(when: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use oh_core::{ActivityEvent, Config, EventStore, paths};
+use oh_processing::{DayReport, Processor, SearchHit};
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
@@ -24,6 +25,9 @@ const STATUS_EVENT: &str = "openhistory://status";
 pub struct AppState {
     service: Arc<CollectorService>,
     config: Mutex<Config>,
+    /// Derived history: episodes, rollups, and the search index. Held open because
+    /// the index lives in memory and search runs on every keystroke.
+    processor: Mutex<Processor>,
     /// The tray's recording checkbox, kept so it can follow the real state when
     /// recording is toggled from the window rather than from the tray.
     recording_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
@@ -68,7 +72,7 @@ fn app_info() -> AppInfo {
     AppInfo {
         name: "OpenHistory",
         version: env!("CARGO_PKG_VERSION"),
-        phase: 2,
+        phase: 3,
         data_dir: paths::data_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
@@ -134,6 +138,36 @@ fn recorded_days() -> Result<Vec<String>, String> {
     Ok(store
         .recorded_days()
         .map_err(to_message)?
+        .into_iter()
+        .map(|date| date.format("%Y-%m-%d").to_string())
+        .collect())
+}
+
+/// Episodes and measurements for one local day.
+///
+/// The day is processed on the way out if the event log has moved since the report
+/// was last written, so the interface never has to ask for a refresh.
+#[tauri::command]
+fn day_report(date: String, state: State<'_, AppState>) -> Result<DayReport, String> {
+    let date = parse_date(&date)?;
+    state.processor.lock().day(date).map_err(to_message)
+}
+
+/// Episodes matching every term in the query, most recent first.
+#[tauri::command]
+fn search_history(
+    query: String,
+    limit: Option<usize>,
+    state: State<'_, AppState>,
+) -> Vec<SearchHit> {
+    state.processor.lock().search(&query, limit.unwrap_or(50))
+}
+
+/// Discard everything derived and rebuild it from the event log.
+#[tauri::command]
+fn rebuild_history(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let days = state.processor.lock().rebuild().map_err(to_message)?;
+    Ok(days
         .into_iter()
         .map(|date| date.format("%Y-%m-%d").to_string())
         .collect())
@@ -251,6 +285,7 @@ pub fn run() {
             app.manage(AppState {
                 service,
                 config: Mutex::new(config),
+                processor: Mutex::new(Processor::open()?),
                 recording_item: Mutex::new(Some(recording_item)),
             });
             Ok(())
@@ -272,6 +307,9 @@ pub fn run() {
             set_config,
             read_day,
             recorded_days,
+            day_report,
+            search_history,
+            rebuild_history,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenHistory");

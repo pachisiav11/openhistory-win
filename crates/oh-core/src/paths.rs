@@ -47,6 +47,11 @@ pub fn tokens_file() -> Result<PathBuf> {
     Ok(data_dir()?.join("tokens.json"))
 }
 
+/// The inverted search index over every episode.
+pub fn search_index_file() -> Result<PathBuf> {
+    Ok(index_dir()?.join("search-index.json"))
+}
+
 /// Directory where downloaded GGUF models are kept.
 pub fn models_dir() -> Result<PathBuf> {
     Ok(data_dir()?.join("models"))
@@ -99,6 +104,10 @@ mod tests {
         assert_eq!(data_dir().unwrap(), temp.path());
         assert_eq!(events_dir().unwrap(), temp.path().join("events"));
         assert_eq!(config_file().unwrap(), temp.path().join("config.json"));
+        assert_eq!(
+            search_index_file().unwrap(),
+            temp.path().join("index").join("search-index.json")
+        );
 
         let date = NaiveDate::from_ymd_opt(2026, 8, 21).unwrap();
         assert_eq!(

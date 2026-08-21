@@ -11,7 +11,11 @@ import {
   mockCommand,
   type ActivityEvent,
   type AppInfo,
+  type AppUsage,
   type Config,
+  type DayReport,
+  type Episode,
+  type SearchHit,
   type Status,
 } from "./ipc";
 
@@ -65,6 +69,104 @@ function sample(): ActivityEvent[] {
   ];
 }
 
+/**
+ * The episodes the processing layer would derive from {@link sample}.
+ *
+ * Written out rather than computed: episode detection lives in Rust, and a second
+ * implementation here would be a second thing to keep correct.
+ */
+function sampleEpisodes(): Episode[] {
+  return [
+    {
+      id: `${localToday()}#1`,
+      date: localToday(),
+      app: "Visual Studio Code",
+      appPath: String.raw`C:\vscode\Code.exe`,
+      title: "collector.rs - openhistory-win",
+      titles: ["collector.rs - openhistory-win", "store.rs - openhistory-win"],
+      urls: [],
+      start: minutesAgo(45),
+      end: minutesAgo(22),
+      durationMs: 23 * 60_000,
+      activeMs: 23 * 60_000,
+      eventCount: 6,
+      isPrivate: false,
+    },
+    {
+      id: `${localToday()}#2`,
+      date: localToday(),
+      app: "Google Chrome",
+      appPath: String.raw`C:\chrome\chrome.exe`,
+      title: "Win32 accessibility - Google Chrome",
+      titles: ["Win32 accessibility - Google Chrome"],
+      urls: ["https://learn.microsoft.com/windows/win32/winauto/"],
+      start: minutesAgo(21),
+      end: minutesAgo(13),
+      durationMs: 8 * 60_000,
+      activeMs: 8 * 60_000,
+      eventCount: 3,
+      isPrivate: false,
+    },
+    {
+      id: `${localToday()}#3`,
+      date: localToday(),
+      app: "Google Chrome",
+      appPath: String.raw`C:\chrome\chrome.exe`,
+      titles: [],
+      urls: [],
+      start: minutesAgo(12),
+      end: minutesAgo(4),
+      durationMs: 8 * 60_000,
+      activeMs: 8 * 60_000,
+      eventCount: 1,
+      isPrivate: true,
+    },
+    {
+      id: `${localToday()}#4`,
+      date: localToday(),
+      app: "Slack",
+      appPath: String.raw`C:\slack\slack.exe`,
+      title: "#engineering - Slack",
+      titles: ["#engineering - Slack"],
+      urls: [],
+      start: minutesAgo(3),
+      end: minutesAgo(0),
+      durationMs: 3 * 60_000,
+      activeMs: 3 * 60_000,
+      eventCount: 2,
+      isPrivate: false,
+    },
+  ];
+}
+
+function sampleReport(): DayReport {
+  const episodes = sampleEpisodes();
+  const totals = new Map<string, AppUsage>();
+  for (const one of episodes) {
+    const running = totals.get(one.app) ?? { app: one.app, activeMs: 0, episodes: 0 };
+    running.activeMs += one.activeMs;
+    running.episodes += 1;
+    totals.set(one.app, running);
+  }
+
+  const first = episodes[0];
+  const last = episodes.at(-1);
+  return {
+    date: localToday(),
+    episodes,
+    rollup: {
+      date: localToday(),
+      activeMs: episodes.reduce((sum, one) => sum + one.activeMs, 0),
+      episodes: episodes.length,
+      apps: [...totals.values()].sort((a, b) => b.activeMs - a.activeMs),
+      hours: [],
+      ...(first ? { firstActivity: first.start } : {}),
+      ...(last ? { lastActivity: last.end } : {}),
+      privateEpisodes: episodes.filter((one) => one.isPrivate).length,
+    },
+  };
+}
+
 export function installBrowserMocks(): void {
   if (isTauri()) return;
 
@@ -85,7 +187,7 @@ export function installBrowserMocks(): void {
   mockCommand("app_info", (): AppInfo => ({
     name: "OpenHistory",
     version: "0.1.0",
-    phase: 2,
+    phase: 3,
     dataDir: DATA_DIR,
   }));
 
@@ -118,6 +220,51 @@ export function installBrowserMocks(): void {
   );
 
   mockCommand("recorded_days", (): string[] => [localToday()]);
+
+  mockCommand("day_report", (args): DayReport =>
+    args?.date === localToday()
+      ? sampleReport()
+      : {
+          date: String(args?.date ?? ""),
+          episodes: [],
+          rollup: {
+            date: String(args?.date ?? ""),
+            activeMs: 0,
+            episodes: 0,
+            apps: [],
+            hours: [],
+            privateEpisodes: 0,
+          },
+        },
+  );
+
+  mockCommand("search_history", (args): SearchHit[] => {
+    const terms = String(args?.query ?? "")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (terms.length === 0) return [];
+
+    return sampleEpisodes()
+      .filter((one) => !one.isPrivate)
+      .map((one) => ({
+        id: one.id,
+        date: one.date,
+        app: one.app,
+        ...(one.title ? { title: one.title } : {}),
+        start: one.start,
+        end: one.end,
+        activeMs: one.activeMs,
+        isPrivate: one.isPrivate,
+        matchedTerms: terms.filter((term) =>
+          `${one.app} ${one.title ?? ""} ${one.urls?.join(" ") ?? ""}`.toLowerCase().includes(term),
+        ).length,
+      }))
+      .filter((hit) => hit.matchedTerms === terms.length)
+      .reverse();
+  });
+
+  mockCommand("rebuild_history", (): string[] => [localToday()]);
 }
 
 function localToday(): string {

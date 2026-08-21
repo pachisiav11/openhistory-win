@@ -1,4 +1,5 @@
-//! Phase 2 test gate: the collector reaches disk.
+//! Phase 2 and Phase 3 test gates: the collector reaches disk, and what reaches disk
+//! becomes episodes.
 //!
 //! The tests that need a desktop are `#[ignore]`d. They relocate the whole data tree
 //! with `OPENHISTORY_DATA_DIR`, which is a process-wide environment variable, so they
@@ -11,6 +12,7 @@
 use std::time::{Duration, Instant};
 
 use oh_core::{ActivityEvent, Config, EventKind, paths};
+use oh_processing::Processor;
 use openhistory_win_lib::collector_service::CollectorService;
 
 const DEADLINE: Duration = Duration::from_secs(12);
@@ -40,10 +42,14 @@ fn poll_until(mut ready: impl FnMut() -> bool) -> bool {
 }
 
 fn is_winver(event: &ActivityEvent) -> bool {
+    is_exe(event, "winver.exe")
+}
+
+fn is_exe(event: &ActivityEvent, exe: &str) -> bool {
     event
         .application
         .as_ref()
-        .is_some_and(|app| app.path.to_ascii_lowercase().ends_with("winver.exe"))
+        .is_some_and(|app| app.path.to_ascii_lowercase().ends_with(exe))
 }
 
 /// The Phase 2 gate. Recording a real desktop session produces a readable JSONL log
@@ -155,6 +161,106 @@ fn reconfiguring_keeps_recording_and_keeps_the_history() {
             >= 2,
         "each start must be marked in the log"
     );
+}
+
+/// The Phase 3 gate. A recorded session becomes episodes with measurable time in
+/// them, and those episodes are searchable.
+///
+/// Two applications are brought to the foreground in turn, with a pause between them,
+/// so the first episode has an end that is later than its start. A single-event
+/// episode is legitimate but carries no measurable time, and the gate is about time.
+///
+/// Both are plain Win32 executables. A packaged application such as Windows 11's
+/// Notepad launches through a stub, so killing what was spawned leaves the real window
+/// running on the desktop.
+#[test]
+#[ignore = "records a real desktop session"]
+fn a_recorded_session_becomes_searchable_episodes() {
+    let temp = isolated_data_dir();
+    let service = CollectorService::detached();
+    service
+        .start(&Config::default())
+        .expect("the service must start");
+
+    let mut winver = std::process::Command::new("winver.exe")
+        .spawn()
+        .expect("winver must launch");
+    let saw_winver = poll_until(|| today_on_disk().iter().any(is_winver));
+    std::thread::sleep(Duration::from_secs(3));
+
+    let mut charmap = std::process::Command::new("charmap.exe")
+        .spawn()
+        .expect("charmap must launch");
+    let saw_charmap = poll_until(|| today_on_disk().iter().any(|e| is_exe(e, "charmap.exe")));
+    std::thread::sleep(Duration::from_secs(3));
+
+    let _ = winver.kill();
+    let _ = winver.wait();
+    let _ = charmap.kill();
+    let _ = charmap.wait();
+    service.stop();
+
+    assert!(saw_winver, "winver never reached the log");
+    assert!(saw_charmap, "charmap never reached the log");
+
+    let mut processor = Processor::in_root(temp.path()).expect("the processor must open");
+    let report = processor
+        .process_day(oh_core::today())
+        .expect("today must process");
+
+    println!("{} episodes:", report.episodes.len());
+    for episode in &report.episodes {
+        println!("  {}", episode.describe());
+    }
+
+    assert!(
+        report.episodes.len() >= 2,
+        "two applications in the foreground must make at least two episodes, got {}",
+        report.episodes.len()
+    );
+    assert!(
+        report.rollup.active_ms > 0,
+        "the day must have measurable active time"
+    );
+    assert!(
+        report.rollup.hours.iter().any(|hour| hour.active_ms > 0),
+        "at least one hour must carry time"
+    );
+    assert_eq!(
+        report.rollup.hours.iter().map(|h| h.active_ms).sum::<i64>(),
+        report.rollup.active_ms,
+        "the hours must account for exactly the day's total"
+    );
+    assert!(
+        report.rollup.apps.iter().any(|app| app.active_ms > 0),
+        "time must be attributed to an application"
+    );
+
+    // The episodes reached the index on the way out, so they are findable by the name
+    // the desktop gave them. That name is taken from the report rather than written in
+    // here: `winver.exe` calls itself "Version Reporter Applet", and the index holds
+    // what was displayed, not what was launched.
+    let named = report
+        .episodes
+        .iter()
+        .find(|episode| !episode.is_private)
+        .expect("at least one episode must be describable");
+    let term = named
+        .app
+        .split_whitespace()
+        .next()
+        .expect("a name to search");
+    let hits = processor.search(term, 10);
+    assert!(
+        hits.iter().any(|hit| hit.episode.id == named.id),
+        "searching for {term:?} must find the episode it names"
+    );
+
+    // Everything is derived, so processing the same day twice changes nothing.
+    let again = processor
+        .process_day(oh_core::today())
+        .expect("reprocessing must work");
+    assert_eq!(report, again, "processing must be deterministic");
 }
 
 #[test]

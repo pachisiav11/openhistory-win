@@ -21,7 +21,7 @@ flight and [`TODO_log.md`](TODO_log.md) for what has landed.
 | 0 | Repository, workspace scaffold, CI | done |
 | 1 | Native activity collector | done |
 | 2 | Tauri shell, JSONL persistence | done |
-| 3 | Episode detection, rollups, search index | pending |
+| 3 | Episode detection, rollups, search index | done |
 | 4 | Inference: Anthropic and local llama.cpp | pending |
 | 5 | Local MCP server | pending |
 | 6 | React frontend | pending |
@@ -77,15 +77,20 @@ Everything is plain text under `%APPDATA%\openhistory-win`:
 ```
 config.json                    settings, safe to edit by hand
 events/2026-08-21.jsonl        one JSON object per line, append-only
-episodes/                      grouped activity          (phase 3)
+episodes/2026-08-21.json       that day grouped into episodes, with totals
+index/search-index.json        inverted index over every episode
 summaries/                     hourly and daily writing  (phase 4)
-index/                         search index              (phase 3)
 models/                        downloaded GGUF files     (phase 4)
 ```
 
 Event logs are cut on your local date and never rewritten, so a crash can cost at most
 the event being written. Nothing is compressed or encoded — `type` and `jq` both work.
 Set `OPENHISTORY_DATA_DIR` to put the whole tree somewhere else.
+
+Everything outside `events/` is derived from it. Episodes group consecutive activity in
+one application; each one records the time it spanned and, separately, the time there is
+evidence for — a window left in the foreground overnight is not eight hours of work.
+Delete `episodes/` and `index/` and they are rebuilt from the event log.
 
 Closing the window leaves the app recording in the tray. Quit from the tray menu to
 stop it entirely.
@@ -140,8 +145,9 @@ npm test
 
 Some tests are `#[ignore]`d because they open real windows and need an interactive
 desktop — including the one that launches every installed browser in private mode and
-asserts nothing about it is recorded, and the one that records a real session and reads
-it back off disk. Run those deliberately:
+asserts nothing about it is recorded, the one that records a real session and reads it
+back off disk, and the one that records two applications in turn and checks that they
+become searchable episodes with measurable time in them. Run those deliberately:
 
 ```bash
 cargo test -p oh-collector --test live_desktop -- --ignored --test-threads=1

@@ -1,72 +1,76 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  dayReport,
   invoke,
   isTauri,
-  localDate,
   onStatus,
-  type ActivityEvent,
   type AppInfo,
+  type DayReport,
+  type Episode,
   type Status,
 } from "./lib/ipc";
+import { clockTime, duration } from "./lib/format";
 
-/** Human labels for the event kinds the Windows collector produces. */
-const KIND_LABELS: Record<string, string> = {
-  collectorStarted: "Recording started",
-  applicationActivated: "Switched to",
-  windowChanged: "Window",
-  urlChanged: "Opened",
-  applicationTerminated: "Closed",
-  screenSlept: "Screen off",
-  screenWoke: "Screen on",
-  sessionLocked: "Locked",
-  sessionUnlocked: "Unlocked",
-  privacyBoundary: "Private browsing",
-};
+/** How long to wait after the last recorded event before reprocessing the day. */
+const REFRESH_DELAY_MS = 800;
 
-function clockTime(timestamp: string): string {
-  const when = new Date(timestamp);
-  if (Number.isNaN(when.getTime())) return "--:--";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(when.getHours())}:${pad(when.getMinutes())}`;
+function summarise(report: DayReport): string {
+  const { rollup } = report;
+  const parts = [`${duration(rollup.activeMs)} active`];
+  parts.push(rollup.episodes === 1 ? "1 episode" : `${rollup.episodes} episodes`);
+
+  const leader = rollup.apps[0];
+  if (leader && rollup.apps.length > 1) {
+    parts.push(`mostly ${leader.app}`);
+  }
+  if (rollup.privateEpisodes > 0) {
+    parts.push(
+      rollup.privateEpisodes === 1 ? "1 private session" : `${rollup.privateEpisodes} private sessions`,
+    );
+  }
+  return parts.join(" · ");
 }
 
-function describe(event: ActivityEvent): string {
-  if (event.kind === "privacyBoundary") {
-    return "Nothing was recorded";
-  }
-  return event.browser?.url ?? event.windowTitle ?? event.application?.name ?? "";
+function detailOf(episode: Episode): string {
+  if (episode.isPrivate) return "Private browsing — nothing was recorded";
+  return episode.title ?? "";
 }
 
 export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [report, setReport] = useState<DayReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const report = useCallback((cause: unknown) => {
+  const fail = useCallback((cause: unknown) => {
     setError(cause instanceof Error ? cause.message : String(cause));
   }, []);
 
   const loadToday = useCallback(() => {
-    invoke<ActivityEvent[]>("read_day", { date: localDate() })
-      .then(setEvents)
-      .catch(report);
-  }, [report]);
+    dayReport().then(setReport).catch(fail);
+  }, [fail]);
 
   useEffect(() => {
-    invoke<AppInfo>("app_info").then(setInfo).catch(report);
-    invoke<Status>("get_status").then(setStatus).catch(report);
+    invoke<AppInfo>("app_info").then(setInfo).catch(fail);
+    invoke<Status>("get_status").then(setStatus).catch(fail);
     loadToday();
-  }, [loadToday, report]);
+  }, [loadToday, fail]);
 
-  // The backend pushes a status on every recorded event, which is also the signal
-  // that the day's log has grown.
+  // The backend pushes a status on every recorded event. Reprocessing the day on
+  // each one would rescan the whole log during a burst of window switching, so the
+  // refresh trails the last event instead.
+  const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
-    return onStatus((pushed) => {
+    const stop = onStatus((pushed) => {
       setStatus(pushed);
-      loadToday();
+      clearTimeout(pending.current);
+      pending.current = setTimeout(loadToday, REFRESH_DELAY_MS);
     });
+    return () => {
+      clearTimeout(pending.current);
+      stop();
+    };
   }, [loadToday]);
 
   const toggleRecording = useCallback(() => {
@@ -78,11 +82,12 @@ export default function App() {
         setStatus(next);
         loadToday();
       })
-      .catch(report)
+      .catch(fail)
       .finally(() => setBusy(false));
-  }, [status?.running, loadToday, report]);
+  }, [status?.running, loadToday, fail]);
 
   const running = status?.running ?? false;
+  const episodes = report ? [...report.episodes].reverse() : [];
 
   return (
     <main className="shell">
@@ -123,23 +128,28 @@ export default function App() {
 
       <section aria-label="Today">
         <h2 className="section__title">Today</h2>
-        {events.length === 0 ? (
+        {report && report.episodes.length > 0 ? (
+          <p className="summary">{summarise(report)}</p>
+        ) : null}
+
+        {episodes.length === 0 ? (
           <p className="empty">
             Nothing recorded yet today. Switch to another window and it will appear here.
           </p>
         ) : (
-          <ol className="events">
-            {[...events].reverse().map((event) => (
-              <li key={event.id} className={`event event--${event.kind}`}>
-                <time className="event__time" dateTime={event.timestamp}>
-                  {clockTime(event.timestamp)}
-                </time>
-                <span className="event__body">
-                  <span className="event__kind">
-                    {KIND_LABELS[event.kind] ?? event.kind}
-                    {event.application ? ` ${event.application.name}` : ""}
-                  </span>
-                  <span className="event__detail">{describe(event)}</span>
+          <ol className="episodes">
+            {episodes.map((episode) => (
+              <li
+                key={episode.id}
+                className={`episode${episode.isPrivate ? " episode--private" : ""}`}
+              >
+                <span className="episode__when">
+                  <time dateTime={episode.start}>{clockTime(episode.start)}</time>
+                  <span className="episode__length">{duration(episode.activeMs)}</span>
+                </span>
+                <span className="episode__body">
+                  <span className="episode__app">{episode.app}</span>
+                  <span className="episode__detail">{detailOf(episode)}</span>
                 </span>
               </li>
             ))}

@@ -7,12 +7,15 @@ import {
   emitStatus,
   localDate,
   mockCommand,
-  type ActivityEvent,
   type AppInfo,
+  type AppUsage,
+  type DayReport,
+  type Episode,
   type Status,
 } from "./lib/ipc";
 
 const DATA_DIR = String.raw`C:\Users\you\AppData\Roaming\openhistory-win`;
+const MINUTE = 60_000;
 
 function status(overrides: Partial<Status> = {}): Status {
   return {
@@ -24,27 +27,55 @@ function status(overrides: Partial<Status> = {}): Status {
   };
 }
 
-function event(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
+function episode(overrides: Partial<Episode> = {}): Episode {
   return {
-    version: 1,
-    id: "e1",
-    timestamp: "2026-08-21T14:05:00.000Z",
-    kind: "applicationActivated",
-    application: { name: "Visual Studio Code", path: String.raw`C:\Code.exe`, pid: 1 },
-    windowTitle: "collector.rs - openhistory-win",
+    id: "2026-08-21#1",
+    date: "2026-08-21",
+    app: "Visual Studio Code",
+    title: "collector.rs - openhistory-win",
+    start: "2026-08-21T14:05:00.000Z",
+    end: "2026-08-21T14:35:00.000Z",
+    durationMs: 30 * MINUTE,
+    activeMs: 30 * MINUTE,
+    eventCount: 4,
+    isPrivate: false,
     ...overrides,
   };
 }
 
+/** Build the rollup the backend would have derived from these episodes. */
+function report(episodes: Episode[] = [episode()]): DayReport {
+  const totals = new Map<string, AppUsage>();
+  for (const one of episodes) {
+    const running = totals.get(one.app) ?? { app: one.app, activeMs: 0, episodes: 0 };
+    running.activeMs += one.activeMs;
+    running.episodes += 1;
+    totals.set(one.app, running);
+  }
+
+  return {
+    date: localDate(),
+    episodes,
+    rollup: {
+      date: localDate(),
+      activeMs: episodes.reduce((sum, one) => sum + one.activeMs, 0),
+      episodes: episodes.length,
+      apps: [...totals.values()].sort((a, b) => b.activeMs - a.activeMs),
+      hours: [],
+      privateEpisodes: episodes.filter((one) => one.isPrivate).length,
+    },
+  };
+}
+
 /** Register a working backend. Individual tests override what they care about. */
-function backend(events: ActivityEvent[] = [event()], initial: Status = status()) {
+function backend(day: DayReport = report(), initial: Status = status()) {
   let current = initial;
   mockCommand(
     "app_info",
-    (): AppInfo => ({ name: "OpenHistory", version: "0.1.0", phase: 2, dataDir: DATA_DIR }),
+    (): AppInfo => ({ name: "OpenHistory", version: "0.1.0", phase: 3, dataDir: DATA_DIR }),
   );
   mockCommand("get_status", () => current);
-  mockCommand("read_day", () => events);
+  mockCommand("day_report", () => day);
   mockCommand("stop_collector", () => {
     current = { ...current, running: false };
     return current;
@@ -65,7 +96,7 @@ describe("App shell", () => {
     backend();
     mockCommand(
       "app_info",
-      (): AppInfo => ({ name: "OpenHistory", version: "9.9.9", phase: 2, dataDir: DATA_DIR }),
+      (): AppInfo => ({ name: "OpenHistory", version: "9.9.9", phase: 3, dataDir: DATA_DIR }),
     );
     render(<App />);
 
@@ -92,7 +123,7 @@ describe("App shell", () => {
 
 describe("Recording status", () => {
   it("reports recording and the day's count", async () => {
-    backend([], status({ eventsToday: 7 }));
+    backend(report([]), status({ eventsToday: 7 }));
     render(<App />);
 
     expect(await screen.findByText("Recording")).toBeInTheDocument();
@@ -101,7 +132,7 @@ describe("Recording status", () => {
   });
 
   it("reports being paused", async () => {
-    backend([], status({ running: false }));
+    backend(report([]), status({ running: false }));
     render(<App />);
 
     expect(await screen.findByText("Paused")).toBeInTheDocument();
@@ -151,20 +182,22 @@ describe("Today", () => {
   it("asks for today's local date", async () => {
     backend();
     const seen: unknown[] = [];
-    mockCommand("read_day", (args) => {
+    mockCommand("day_report", (args) => {
       seen.push(args?.date);
-      return [event()];
+      return report();
     });
     render(<App />);
 
     await waitFor(() => expect(seen).toContain(localDate()));
   });
 
-  it("lists the day's events newest first", async () => {
-    backend([
-      event({ id: "a", timestamp: "2026-08-21T09:00:00.000Z", windowTitle: "earlier" }),
-      event({ id: "b", timestamp: "2026-08-21T17:00:00.000Z", windowTitle: "later" }),
-    ]);
+  it("lists the day's episodes newest first", async () => {
+    backend(
+      report([
+        episode({ id: "a", start: "2026-08-21T09:00:00.000Z", title: "earlier" }),
+        episode({ id: "b", start: "2026-08-21T17:00:00.000Z", title: "later" }),
+      ]),
+    );
     render(<App />);
 
     const items = await screen.findAllByRole("listitem");
@@ -173,44 +206,52 @@ describe("Today", () => {
     expect(items[1]).toHaveTextContent("earlier");
   });
 
-  it("shows a URL when one was recorded", async () => {
-    backend([
-      event({
-        kind: "urlChanged",
-        application: { name: "Google Chrome", path: String.raw`C:\chrome.exe`, pid: 2 },
-        windowTitle: "Win32 accessibility - Google Chrome",
-        browser: { url: "https://learn.microsoft.com/windows/win32/", isPrivate: false },
-      }),
-    ]);
+  it("measures each episode and the day as a whole", async () => {
+    backend(
+      report([
+        episode({ id: "a", app: "Visual Studio Code", activeMs: 90 * MINUTE }),
+        episode({ id: "b", app: "Google Chrome", activeMs: 30 * MINUTE }),
+      ]),
+    );
     render(<App />);
 
-    expect(
-      await screen.findByText("https://learn.microsoft.com/windows/win32/"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/2h active/)).toBeInTheDocument();
+    expect(screen.getByText(/2 episodes/)).toBeInTheDocument();
+    expect(screen.getByText(/mostly Visual Studio Code/)).toBeInTheDocument();
+    expect(screen.getByText("1h 30m")).toBeInTheDocument();
+    expect(screen.getByText("30m")).toBeInTheDocument();
   });
 
   it("names a private session without showing anything about it", async () => {
-    backend([
-      {
-        version: 1,
-        id: "p1",
-        timestamp: "2026-08-21T14:05:00.000Z",
-        kind: "privacyBoundary",
-        application: { name: "Google Chrome", path: String.raw`C:\chrome.exe`, pid: 2 },
-        browser: { isPrivate: true },
-      },
-    ]);
+    const secret = episode({ id: "p1", app: "Google Chrome", isPrivate: true });
+    delete secret.title;
+    backend(report([secret]));
     render(<App />);
 
     expect(await screen.findByText(/Private browsing/)).toBeInTheDocument();
-    expect(screen.getByText("Nothing was recorded")).toBeInTheDocument();
+    expect(screen.getByText("Google Chrome")).toBeInTheDocument();
+    expect(screen.getByText(/1 private session/)).toBeInTheDocument();
   });
 
   it("explains an empty day rather than showing a bare list", async () => {
-    backend([]);
+    backend(report([]));
     render(<App />);
 
     expect(await screen.findByText(/Nothing recorded yet today/)).toBeInTheDocument();
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+  });
+
+  it("reprocesses the day after the backend records something", async () => {
+    let day = report([episode({ id: "a", title: "first" })]);
+    backend(day);
+    mockCommand("day_report", () => day);
+    render(<App />);
+    await screen.findByText("first");
+
+    day = report([episode({ id: "a", title: "first" }), episode({ id: "b", title: "second" })]);
+    emitStatus(status({ eventsToday: 9 }));
+
+    // The refresh trails the last event, so this deliberately outlasts the debounce.
+    expect(await screen.findByText("second", undefined, { timeout: 3000 })).toBeInTheDocument();
   });
 });

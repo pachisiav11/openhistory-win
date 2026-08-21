@@ -265,3 +265,54 @@ the only thing that separates them.
 shell. That is why it is a named constant with its own tests rather than an inline
 match, and why `CabinetWClass` is in the tests as an explicit example of what must
 still be recorded.
+
+## AD-11: An episode records elapsed time and evidenced time separately
+
+**Decision.** Every episode carries two measurements. `duration_ms` is the wall-clock
+span from its first event to its last. `active_ms` is the part of that span there is
+evidence for: each silence between consecutive events contributes at most `ACTIVE_GAP`
+(5 minutes). Rollups and the interface measure with `active_ms`. An episode ends only
+after `IDLE_SPLIT` (15 minutes) of silence.
+
+**Why.** The original plan used a single 5-minute gap: more than five minutes without
+an event ended the episode. That is wrong for a foreground collector, which emits
+events when the foreground *changes* and is otherwise silent. Ten quiet minutes reading
+one file in one window produce no events at all, and a single threshold has to choose
+between two bad answers — tear that stretch into two episodes, or credit an eight-hour
+overnight gap as eight hours of work. Two thresholds answer both: the reading session
+stays one episode, and the silence inside it stops being counted after five minutes.
+
+This was found by the tests, not by reasoning. Two episode tests failed on the first
+run of the Phase 3 suite, and the threshold was the reason.
+
+**Consequence.** `active_ms <= duration_ms` always, and the two diverge whenever the
+user works without switching windows. Anything reporting "time spent" must use
+`active_ms`; `duration_ms` exists to place an episode on a timeline, not to measure it.
+A day's hourly totals are apportioned from `active_ms` in proportion to each episode's
+overlap with each local hour, with the rounding remainder given to the first hour, so
+the hours always sum to exactly the daily total.
+
+## AD-12: Everything after the event log is derived and disposable
+
+**Decision.** Episodes (`episodes/YYYY-MM-DD.json`) and the search index
+(`index/search-index.json`) are caches. The event log is the only thing that cannot be
+regenerated. `Processor::rebuild` throws both away and derives them again from the log
+alone, and a corrupt or unreadable day report is logged and treated as absent rather
+than as an error.
+
+A day's report is refreshed when the event log's modification time is later than the
+report's. There is no processing timer and no incremental update.
+
+**Why.** Today's report goes stale continuously while the collector is running, so
+something has to decide when to redo it. A timer either wastes work on an idle machine
+or lags behind a busy one; incremental update means two code paths that must agree
+about episode boundaries, and the boundaries are exactly what is hard. Comparing two
+modification times is one path, always correct, and costs two `stat` calls.
+
+**Consequence.** Reprocessing a day is a full re-read of that day's log. That is
+acceptable because a day is bounded — a heavy day is a few thousand lines — but it does
+mean the interface must not ask for a report on every recorded event. The Today view
+therefore waits 800 ms after the last status push before asking again. Episode ids are
+derived from the day and the start instant (`YYYY-MM-DD#<start_millis>`) rather than
+generated, so reprocessing produces byte-identical output and anything holding an id
+keeps working.
