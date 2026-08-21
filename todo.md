@@ -2,3 +2,4 @@
 - 2026-08-21 21:51: Phase 4 — Inference layer (Anthropic opt-in + app-managed llama-server, curated model catalog, on-demand load/unload)
 - 2026-08-21 21:51: Phase 5 — MCP server (127.0.0.1:47123, bearer token auth, sanitization)
 - 2026-08-21 21:51: Phase 6 — React frontend (Timeline, Search, Day View, Settings)
+- 2026-08-22 02:16: CI actions target Node.js 20, which GitHub has deprecated and is forcing onto Node 24. Bump actions/checkout, actions/setup-node, actions/upload-artifact and actions/download-artifact to v5.
