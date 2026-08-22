@@ -15,6 +15,9 @@ const mocks = new Map<string, MockHandler>();
 /** Event the backend pushes whenever the recording status changes. */
 export const STATUS_EVENT = "openhistory://status";
 
+/** Event the backend pushes while a local model downloads. */
+export const DOWNLOAD_EVENT = "openhistory://download";
+
 /** True when running inside the Tauri WebView rather than a plain browser. */
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -28,6 +31,7 @@ export function mockCommand(command: string, handler: MockHandler): void {
 export function clearMocks(): void {
   mocks.clear();
   statusHandlers.clear();
+  downloadHandlers.clear();
 }
 
 export async function invoke<T>(
@@ -100,11 +104,33 @@ export interface RecordingConfig {
   captureUrls: boolean;
 }
 
+export type InferenceProvider = "disabled" | "anthropic" | "openai" | "google" | "local";
+
+export interface InferenceConfig {
+  provider: InferenceProvider;
+  /** Nothing is sent to a cloud provider until this is true. */
+  cloudConsent: boolean;
+  cloudModel: string;
+  localModelId?: string;
+  localModelPath?: string;
+  contextSize: number;
+  idleUnloadSeconds: number;
+  autoSummarize: boolean;
+}
+
+export interface McpConfig {
+  enabled: boolean;
+  port: number;
+  allowHistory: boolean;
+}
+
 export interface Config {
   recordingEnabled: boolean;
   startOnLaunch: boolean;
   retentionDays: number;
   recording: RecordingConfig;
+  inference: InferenceConfig;
+  mcp: McpConfig;
 }
 
 export interface ApplicationDescriptor {
@@ -218,4 +244,193 @@ export function rebuildHistory(): Promise<string[]> {
 export function localDate(when: Date = new Date()): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
+}
+
+/* ── Summaries, models and keys ─────────────────────────────────────────────── */
+
+/** One entry of the cloud dropdown. Seven models across three providers. */
+export interface CloudModel {
+  id: string;
+  name: string;
+  provider: InferenceProvider;
+  note: string;
+  supportsEffort: boolean;
+  /** The company that runs it, used to group the list. */
+  vendor: string;
+  /** A key for this provider is stored, so choosing this model would work. */
+  hasKey: boolean;
+}
+
+/** Whether summaries can be produced with the current settings. */
+export interface Readiness {
+  provider: string;
+  ready: boolean;
+  blockedBy?: string;
+  model?: string;
+}
+
+/** A downloadable model, with what is true of it on this machine. */
+export interface LocalModel {
+  id: string;
+  name: string;
+  vendor: string;
+  parameters: string;
+  quantization: string;
+  repo: string;
+  file: string;
+  approximateBytes: number;
+  recommendedRamBytes: number;
+  note: string;
+  installed: boolean;
+  installedBytes?: number;
+  path?: string;
+  fitsMemory: boolean;
+}
+
+/** One step of a download. Arrives on {@link DOWNLOAD_EVENT}. */
+export interface DownloadProgress {
+  modelId: string;
+  downloadedBytes: number;
+  totalBytes?: number;
+  done: boolean;
+  /** Set when the download stopped without finishing. Cancelling counts. */
+  error?: string;
+}
+
+/** Which providers have a key stored. The key itself never comes back. */
+export interface KeyStatus {
+  provider: InferenceProvider;
+  label: string;
+  stored: boolean;
+}
+
+export interface LlamaStatus {
+  running: boolean;
+  port?: number;
+  model?: string;
+  managed: boolean;
+  idleSeconds?: number;
+}
+
+export interface HourSummary {
+  hour: number;
+  text: string;
+  activeMs: number;
+  generatedAt: string;
+  provider: string;
+  model: string;
+}
+
+export interface DaySummary {
+  date: string;
+  daily?: string;
+  dailyGeneratedAt?: string;
+  hours: HourSummary[];
+}
+
+/** What one summarization run did. */
+export interface RunReport {
+  date: string;
+  hoursWritten: number[];
+  hoursSkipped: number[];
+  hoursTooQuiet: number[];
+  dailyWritten: boolean;
+  failure?: string;
+}
+
+export const cloudModels = () => invoke<CloudModel[]>("cloud_models");
+export const useCloudModel = (id: string) => invoke<Config>("use_cloud_model", { id });
+export const inferenceReadiness = () => invoke<Readiness>("inference_readiness");
+
+export const localModels = () => invoke<LocalModel[]>("local_models");
+export const downloadModel = (id: string) => invoke<LocalModel>("download_model", { id });
+export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
+export const removeModel = (id: string) => invoke<LocalModel>("remove_model", { id });
+export const useLocalModel = (id: string) => invoke<Config>("use_local_model", { id });
+
+export const apiKeys = () => invoke<KeyStatus[]>("api_keys");
+export const storeApiKey = (provider: InferenceProvider, key: string) =>
+  invoke<boolean>("store_api_key", { provider, key });
+export const forgetApiKey = (provider: InferenceProvider) =>
+  invoke<void>("forget_api_key", { provider });
+
+export const daySummary = (date: string) => invoke<DaySummary>("day_summary", { date });
+export const summarizeDay = (date: string, rewrite = false) =>
+  invoke<RunReport>("summarize_day", { date, rewrite });
+export const summarizeHour = (date: string, hour: number) =>
+  invoke<HourSummary>("summarize_hour", { date, hour });
+export const forgetSummary = (date: string) => invoke<void>("forget_summary", { date });
+
+export const localServerStatus = () => invoke<LlamaStatus>("local_server_status");
+export const stopLocalServer = () => invoke<LlamaStatus>("stop_local_server");
+
+/* ── The local MCP server ───────────────────────────────────────────────────── */
+
+export interface McpStatus {
+  running: boolean;
+  port?: number;
+  url?: string;
+  /** A token exists, so a client could authenticate. */
+  hasToken: boolean;
+}
+
+/** A status, plus a token when one was minted just now. */
+export interface McpHandle extends McpStatus {
+  token?: string;
+}
+
+export const mcpStatus = () => invoke<McpStatus>("mcp_status");
+export const startMcp = () => invoke<McpHandle>("start_mcp");
+export const stopMcp = () => invoke<McpStatus>("stop_mcp");
+export const regenerateMcpToken = () => invoke<string>("regenerate_mcp_token");
+export const forgetMcpTokens = () => invoke<McpStatus>("forget_mcp_tokens");
+export const mcpClientConfig = (token?: string) =>
+  invoke<string>("mcp_client_config", token ? { token } : {});
+
+/* ── Settings and data ──────────────────────────────────────────────────────── */
+
+export const getConfig = () => invoke<Config>("get_config");
+export const setConfig = (config: Config) => invoke<Config>("set_config", { config });
+export const recordedDays = () => invoke<string[]>("recorded_days");
+
+/** What a delete-everything left behind: nothing, and this says how much of it. */
+export interface Deleted {
+  days: number;
+  summaries: number;
+}
+
+export const deleteAllHistory = () => invoke<Deleted>("delete_all_history");
+
+type DownloadHandler = (progress: DownloadProgress) => void;
+const downloadHandlers = new Set<DownloadHandler>();
+
+/**
+ * Subscribe to download progress. Returns an unsubscribe function.
+ *
+ * Served locally outside Tauri, the same way {@link onStatus} is, so the settings
+ * page can be driven in a browser with {@link emitDownload}.
+ */
+export function onDownload(handler: DownloadHandler): () => void {
+  if (!isTauri()) {
+    downloadHandlers.add(handler);
+    return () => downloadHandlers.delete(handler);
+  }
+
+  let stop: (() => void) | undefined;
+  let cancelled = false;
+  void tauriListen<DownloadProgress>(DOWNLOAD_EVENT, (event) =>
+    handler(event.payload),
+  ).then((unlisten) => {
+    if (cancelled) unlisten();
+    else stop = unlisten;
+  });
+  return () => {
+    cancelled = true;
+    stop?.();
+  };
+}
+
+/** Push a download step to every local subscriber. No effect inside Tauri. */
+export function emitDownload(progress: DownloadProgress): void {
+  for (const handler of downloadHandlers) handler(progress);
 }

@@ -179,6 +179,26 @@ impl Processor {
         Ok(days)
     }
 
+    /// Discard every processed report and the whole index.
+    ///
+    /// Unlike [`Processor::rebuild`], nothing is regenerated afterwards: this is the
+    /// derived half of "delete all my history", called once the event log it would
+    /// have rebuilt from has gone.
+    pub fn forget_all(&mut self) -> Result<()> {
+        for date in self.processed_days()? {
+            let path = self.report_path(date);
+            if let Err(error) = std::fs::remove_file(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(error).with_context(|| format!("could not remove {}", path.display()));
+            }
+        }
+
+        self.index = SearchIndex::new();
+        self.index.save_to(&self.index_path)?;
+        Ok(())
+    }
+
     pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
         self.index.search(query, limit)
     }
@@ -426,5 +446,23 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(leftovers, vec!["2026-08-21.json".to_string()]);
+    }
+
+    #[test]
+    fn forgetting_everything_leaves_no_report_and_an_empty_index() {
+        let temp = history(&workday());
+        let mut processor = Processor::in_root(temp.path()).unwrap();
+        processor.day(date()).unwrap();
+
+        assert_eq!(processor.processed_days().unwrap().len(), 1);
+        assert!(!processor.search("chrome", 10).is_empty());
+
+        processor.forget_all().unwrap();
+        assert!(processor.processed_days().unwrap().is_empty());
+        assert!(processor.search("chrome", 10).is_empty());
+
+        // The index on disk is empty too, so a restart does not resurrect it.
+        let reopened = Processor::in_root(temp.path()).unwrap();
+        assert!(reopened.search("chrome", 10).is_empty());
     }
 }

@@ -176,6 +176,23 @@ impl EventStore {
         }
         Ok(removed)
     }
+    /// Delete every log. Returns the dates removed, oldest first.
+    ///
+    /// The open handle is closed first: on Windows a file cannot be deleted while this
+    /// process still holds it open, so today's log would otherwise be the one file
+    /// that survived "delete everything".
+    pub fn delete_all(&mut self) -> Result<Vec<NaiveDate>> {
+        self.open = None;
+
+        let mut removed = Vec::new();
+        for date in self.recorded_days()? {
+            let path = self.dir.join(file_name(date));
+            std::fs::remove_file(&path)
+                .with_context(|| format!("could not remove {}", path.display()))?;
+            removed.push(date);
+        }
+        Ok(removed)
+    }
 }
 
 fn file_name(date: NaiveDate) -> String {
@@ -240,6 +257,30 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         ActivityEvent::at(kind, when)
+    }
+
+    #[test]
+    fn deleting_everything_leaves_no_log_behind_including_the_open_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = EventStore::in_dir(temp.path()).unwrap();
+
+        store
+            .append(&at("2026-08-20T09:00:00Z", EventKind::CollectorStarted))
+            .unwrap();
+        store
+            .append(&at("2026-08-21T09:00:00Z", EventKind::CollectorStarted))
+            .unwrap();
+        assert_eq!(store.recorded_days().unwrap().len(), 2);
+
+        let removed = store.delete_all().unwrap();
+        assert_eq!(removed.len(), 2);
+        assert!(store.recorded_days().unwrap().is_empty());
+
+        // The store stays usable: recording can be turned back on without reopening it.
+        store
+            .append(&at("2026-08-22T09:00:00Z", EventKind::CollectorStarted))
+            .unwrap();
+        assert_eq!(store.recorded_days().unwrap().len(), 1);
     }
 
     #[test]

@@ -150,6 +150,15 @@ impl SummaryStore {
         }
     }
 
+    /// Delete every summary. Returns how many files went.
+    pub fn clear(&self) -> Result<usize> {
+        let days = self.summarized_days();
+        for date in &days {
+            self.forget(*date)?;
+        }
+        Ok(days.len())
+    }
+
     /// Days that have a summary file, oldest first.
     pub fn summarized_days(&self) -> Vec<NaiveDate> {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
@@ -190,6 +199,23 @@ mod tests {
             provider: "local".into(),
             model: "test".into(),
         }
+    }
+
+    #[test]
+    fn clearing_removes_every_summary() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = SummaryStore::in_dir(temp.path()).unwrap();
+
+        for day in [20, 21, 22] {
+            let mut summary = DaySummary::new(NaiveDate::from_ymd_opt(2026, 8, day).unwrap());
+            summary.set_daily("A day of work.");
+            store.save(&summary).unwrap();
+        }
+        assert_eq!(store.summarized_days().len(), 3);
+
+        assert_eq!(store.clear().unwrap(), 3);
+        assert!(store.summarized_days().is_empty());
+        assert!(store.load(date()).is_empty());
     }
 
     #[test]

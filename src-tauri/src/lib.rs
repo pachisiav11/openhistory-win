@@ -189,6 +189,47 @@ fn rebuild_history(state: State<'_, AppState>) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// What was thrown away, so the interface can say so rather than just claiming success.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Deleted {
+    pub days: usize,
+    pub summaries: usize,
+}
+
+/// Delete the event log, every report, the index, and every summary.
+///
+/// The collector is stopped first and restarted after: Windows will not delete a file
+/// this process still holds open, and today's log is exactly that file. Recording
+/// resumes if it was on, because "delete my history" is not "stop recording".
+#[tauri::command]
+fn delete_all_history(
+    state: State<'_, AppState>,
+    summaries: State<'_, SummaryState>,
+) -> Result<Deleted, String> {
+    let config = state.config();
+    let was_running = state.service.is_running();
+    state.service.stop();
+
+    let outcome = (|| -> Result<Deleted, String> {
+        let days = EventStore::open()
+            .map_err(to_message)?
+            .delete_all()
+            .map_err(to_message)?;
+        state.processor.lock().forget_all().map_err(to_message)?;
+        let summaries = summaries.service().store().clear().map_err(to_message)?;
+        Ok(Deleted {
+            days: days.len(),
+            summaries,
+        })
+    })();
+
+    if was_running && let Err(error) = state.service.start(&config) {
+        tracing::error!(%error, "could not resume recording after deleting the history");
+    }
+    outcome
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -354,6 +395,7 @@ pub fn run() {
             day_report,
             search_history,
             rebuild_history,
+            delete_all_history,
             summaries::cloud_models,
             summaries::use_cloud_model,
             summaries::inference_readiness,
