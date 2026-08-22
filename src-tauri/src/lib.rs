@@ -5,13 +5,15 @@
 //! this module is the wiring between them and the window.
 
 pub mod collector_service;
+pub mod mcp;
 pub mod summaries;
 
 use std::sync::Arc;
 
 use chrono::NaiveDate;
-use oh_core::{ActivityEvent, Config, EventStore, paths};
+use oh_core::{ActivityEvent, Config, EventStore, SummaryStore, paths};
 use oh_inference::service::InferenceService;
+use oh_mcp::{History, TokenStore};
 use oh_processing::{DayReport, Processor, SearchHit};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -20,6 +22,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 use collector_service::{CollectorService, Status, StatusListener};
+use mcp::McpState;
 use summaries::SummaryState;
 
 /// Event name the interface listens on for live status.
@@ -29,8 +32,9 @@ pub struct AppState {
     service: Arc<CollectorService>,
     config: Mutex<Config>,
     /// Derived history: episodes, rollups, and the search index. Held open because
-    /// the index lives in memory and search runs on every keystroke.
-    pub(crate) processor: Mutex<Processor>,
+    /// the index lives in memory and search runs on every keystroke, and shared with
+    /// the MCP server, which must read the same index rather than a second copy.
+    pub(crate) processor: Arc<Mutex<Processor>>,
     /// The tray's recording checkbox, kept so it can follow the real state when
     /// recording is toggled from the window rather than from the tray.
     recording_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
@@ -75,7 +79,7 @@ fn app_info() -> AppInfo {
     AppInfo {
         name: "OpenHistory",
         version: env!("CARGO_PKG_VERSION"),
-        phase: 4,
+        phase: 5,
         data_dir: paths::data_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
@@ -114,9 +118,13 @@ fn get_config(state: State<'_, AppState>) -> Config {
     state.config()
 }
 
-/// Replace the settings wholesale and restart the collector if it is running.
+/// Replace the settings wholesale and bring the collector and server into line.
 #[tauri::command]
-fn set_config(mut config: Config, state: State<'_, AppState>) -> Result<Config, String> {
+async fn set_config(
+    mut config: Config,
+    state: State<'_, AppState>,
+    server: State<'_, McpState>,
+) -> Result<Config, String> {
     // The window sends a model identifier; the path it lives at is resolved here so a
     // window can never point the local provider at an arbitrary file.
     summaries::resolve_local_model(&mut config, None)?;
@@ -128,6 +136,8 @@ fn set_config(mut config: Config, state: State<'_, AppState>) -> Result<Config, 
     if config.recording_enabled && !state.service.is_running() {
         state.service.start(&config).map_err(to_message)?;
     }
+
+    server.reconcile(&config.mcp).await?;
     Ok(config)
 }
 
@@ -214,6 +224,12 @@ fn build_tray(app: &AppHandle, recording: bool) -> tauri::Result<CheckMenuItem<t
                     let service = state.service();
                     tauri::async_runtime::block_on(service.shutdown());
                 }
+                // Close the listener before the process goes, so a relaunch finds its
+                // preferred port free rather than falling back to another one.
+                if let Some(state) = app.try_state::<McpState>() {
+                    let server = state.server();
+                    tauri::async_runtime::block_on(server.stop());
+                }
                 app.exit(0);
             }
             _ => {}
@@ -296,12 +312,25 @@ pub fn run() {
             let inference = Arc::new(InferenceService::open()?);
             app.manage(SummaryState::new(Arc::clone(&inference)));
 
+            // One processor for the whole application. The MCP server reads through
+            // the same one the window does, so both see one search index.
+            let processor = Arc::new(Mutex::new(Processor::open()?));
+            let history = History::new(Arc::clone(&processor), Arc::new(SummaryStore::open()?));
+            app.manage(McpState::new(history, TokenStore::open()?));
+
             let recording_item = build_tray(app.handle(), config.recording_enabled)?;
             app.manage(AppState {
                 service,
-                config: Mutex::new(config),
-                processor: Mutex::new(Processor::open()?),
+                config: Mutex::new(config.clone()),
+                processor,
                 recording_item: Mutex::new(Some(recording_item)),
+            });
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(state) = handle.try_state::<McpState>() {
+                    mcp::start_if_enabled(&state, &config).await;
+                }
             });
             Ok(())
         })
@@ -342,6 +371,12 @@ pub fn run() {
             summaries::forget_summary,
             summaries::local_server_status,
             summaries::stop_local_server,
+            mcp::mcp_status,
+            mcp::start_mcp,
+            mcp::stop_mcp,
+            mcp::regenerate_mcp_token,
+            mcp::forget_mcp_tokens,
+            mcp::mcp_client_config,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenHistory");
