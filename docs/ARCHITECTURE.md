@@ -113,20 +113,46 @@ quietly.
 
 ---
 
-## AD-5: The model catalog is curated, with an escape hatch
+## AD-5: The model catalog is curated, and every entry is verified against the live index
 
-**Decision.** Settings lists five vetted models with real sizes, measured against the
-host machine's RAM, plus a file picker for any other GGUF. No model is preselected and
-nothing downloads until the user chooses.
+**Decision.** Settings lists five vetted models, each with the size of the exact file
+that will be downloaded, measured against the host machine's RAM. No model is
+preselected and nothing downloads until the user chooses.
 
-**Catalog:** Gemma 4 E2B QAT text-only, Gemma 4 E4B QAT text-only, Qwen3.5-4B,
-Phi-4-mini 3.8B, Qwen3.5-2B.
+**Catalog.**
+
+| Id | Repository | File | Size |
+|----|------------|------|------|
+| `qwen3-1.7b` | `Qwen/Qwen3-1.7B-GGUF` | `Qwen3-1.7B-Q8_0.gguf` | 1.83 GB |
+| `phi-3-mini` | `microsoft/Phi-3-mini-4k-instruct-gguf` | `Phi-3-mini-4k-instruct-q4.gguf` | 2.39 GB |
+| `qwen3-4b` | `Qwen/Qwen3-4B-GGUF` | `Qwen3-4B-Q4_K_M.gguf` | 2.5 GB |
+| `gemma-4-e2b-qat` | `google/gemma-4-E2B-it-qat-q4_0-gguf` | `gemma-4-E2B_q4_0-it.gguf` | 3.35 GB |
+| `gemma-4-e4b-qat` | `google/gemma-4-E4B-it-qat-q4_0-gguf` | `gemma-4-E4B_q4_0-it.gguf` | 5.15 GB |
 
 **Why.** An unfiltered model list is not a useful choice for someone who does not
 already know what a quantization level is; a fixed single model is not enough for
-someone who does. Sizes are read from the Hugging Face API rather than hardcoded,
-because published figures for these models disagree depending on quantization and on
-whether the vision tower is included.
+someone who does.
+
+**Why the entries must be checked against the index rather than written from memory.**
+The first version of this catalog was written without network access, and three of its
+five repositories did not exist: `Qwen/Qwen3.5-4B-Instruct-GGUF`,
+`Qwen/Qwen3.5-2B-Instruct-GGUF` and `microsoft/Phi-4-mini-instruct-GGUF` are all
+plausible names that no one publishes. The two that did exist were named differently
+from what had been guessed — `google/gemma-4-E4B-it-qat-q4_0-gguf`, not
+`google/gemma-4-e4b-it-qat-GGUF` — and their sizes were wrong by nearly a factor of
+two, because the guessed figure was for a 4-bit quantization of the parameter count
+rather than for the file the repository actually holds. Every row above was read off
+the repository's own file listing.
+
+`approximate_bytes` is therefore a recorded measurement, not a computed estimate. It is
+what the progress bar divides by before the first response header arrives, so a wrong
+value shows a download at 180% and then finishing.
+
+**Consequence.** The catalog goes stale as vendors move and re-quantize their
+repositories. `every_entry_is_complete_enough_to_download` checks the shape of each
+entry offline; nothing in the test suite can check that a repository still exists,
+because that would make the suite depend on the network. Re-checking the five listings
+is a release step.
 
 ---
 
@@ -137,8 +163,8 @@ whether the vision tower is included.
 | `oh-core` | ActivityEvent and Episode types, storage paths, JSONL reader and writer, configuration |
 | `oh-collector` | Win32 hooks, UIAutomation reads, browser and privacy detection, session and power monitoring |
 | `oh-processing` | Episode detection, hourly and daily rollups, inverted search index |
-| `oh-inference` | Provider trait, Anthropic client, llama-server lifecycle, model catalog and downloader |
-| `oh-mcp` | HTTP server, bearer authentication, response sanitization |
+| `oh-inference` | Provider trait, the three cloud clients, llama-server lifecycle, prompt building, model catalog and downloader, credential storage |
+| `oh-mcp` | HTTP server, bearer authentication, the sanitized history view |
 | `src-tauri` | Tauri application, IPC commands, tray, service wiring |
 
 Dependencies point one direction: `oh-core` depends on nothing internal, every other
@@ -170,6 +196,15 @@ be automated, it is written down as an explicit gap rather than quietly assumed.
   preview pane were not available in the environment this was built in.
 - Clicking the tray icon and its menu. The tray is built and its handlers are ordinary
   functions, but no automated test drives a shell notification area.
+- A real request to Anthropic, OpenAI or Google AI Studio. Every provider test runs
+  against a local HTTP server that speaks each vendor's response shape, so the request
+  body, the authentication header, the error mapping and the consent gate are covered,
+  but no key has ever been used. What is unverified is whether each vendor still
+  accepts that request shape.
+- A real model download and a real `llama-server` run. The downloader and the process
+  supervisor are tested against a local server and a stub executable. No GGUF has been
+  fetched, and no summary has been written by a model rather than by a fake.
+- That the five catalog repositories still exist. See AD-5.
 
 ---
 
@@ -316,3 +351,159 @@ therefore waits 800 ms after the last status push before asking again. Episode i
 derived from the day and the start instant (`YYYY-MM-DD#<start_millis>`) rather than
 generated, so reprocessing produces byte-identical output and anything holding an id
 keeps working.
+
+---
+
+## AD-13: One list of models, and the provider follows from the choice
+
+**Decision.** Settings offers a single dropdown holding every model — three Anthropic,
+three OpenAI, one Google, and whichever local models are installed — grouped by who
+runs it. Choosing a model sets the provider. There is no separate provider control.
+
+**Why.** A provider dropdown and a model dropdown have to agree, and every combination
+where they do not is a state the user can reach and the code has to handle: an
+Anthropic provider with a Gemini model selected, a cloud provider with no model, a
+local provider with nothing downloaded. None of those mean anything. Deriving the
+provider from the model makes them unrepresentable, and it matches how the choice is
+actually made — a person picks Haiku or Sonnet, not "Anthropic, and then Haiku".
+
+**Consequence.** The cloud entries are aliases that follow each vendor's newest release
+rather than pinned dated model ids. That keeps the list short and keeps it current, at
+the cost of the model changing under the user when a vendor ships. A summary records
+the model that wrote it, so the history stays honest about what produced each line.
+
+Each entry is labelled with whether its provider has a key, so "needs a key" is visible
+before the choice rather than after it.
+
+---
+
+## AD-14: What leaves the machine is a separate type, not a filtered episode
+
+**Decision.** `oh_processing::PublicEpisode` is the only shape anything outside the
+process ever sees. It carries the application, the start and end, the active time, and
+a title only when the episode is not private. Building one from an `Episode` is where
+redaction happens: a private episode loses its title entirely, a URL loses its query
+string and its fragment, and no file path is ever included. Both the inference layer
+and the MCP server construct their payloads from `PublicEpisode` and have no access
+path to the raw episode.
+
+**Why.** Redaction written as a filter over the outgoing payload is a rule that has to
+be remembered at every call site, and the cost of forgetting once is the entire privacy
+guarantee in AD-4. Redaction written as a type conversion is a rule the compiler
+enforces: there is no way to put a private title into a `PublicEpisode`, because the
+field is not there to put it in.
+
+This also means the two consumers cannot drift. The MCP server and the cloud prompt
+builder redact identically because they redact through the same constructor, and
+`nothing_private_reaches_the_provider` and the MCP server's own sanitization tests are
+testing one implementation from two directions.
+
+**Consequence.** Anything that legitimately needs the full episode — the timeline, the
+search index, the day view — reads `Episode` directly and stays inside the process. The
+boundary is the type, so adding a new outbound consumer means writing it against
+`PublicEpisode` and getting the guarantee for free.
+
+---
+
+## AD-15: API keys live in the Windows Credential Manager, and never come back
+
+**Decision.** Each provider's key is stored as one Credential Manager entry under a
+per-provider target name. The window can store a key and can ask whether one exists. It
+cannot read one. `api_keys` returns a status per provider — the provider name and
+whether something is stored — and nothing else.
+
+**Why.** The alternative is the configuration file, which is plain JSON in a readable
+directory, next to a history the user is encouraged to open with ordinary tools. A key
+in there is readable by every process running as that user and is trivially picked up
+by a backup, a sync client, or a support request that asks for the config.
+
+The keys never coming back to the window is a separate decision from where they are
+kept. A "show key" affordance means the key crosses the IPC boundary into the WebView,
+where it lands in a JavaScript string, a React state value, and any devtools session
+that happens to be open. Nothing in the interface needs the value — the only operations
+are "set" and "is one set" — so the value never has a reason to be there.
+
+**Consequence.** A user who forgets which key they stored has to replace it rather than
+check it. The field says the key is stored and that pasting a new one replaces it, so
+the state is at least legible.
+
+---
+
+## AD-16: The MCP server stores a token's hash, never the token
+
+**Decision.** Enabling the server issues a token, shows it once, and stores only its
+SHA-256 digest. Authentication hashes the presented bearer token and compares digests
+in constant time. There is no route, command or file that can return a token, and
+regenerating one invalidates every earlier one.
+
+**Why.** The token is a bearer credential for the user's entire activity history. A
+stored token is a stored password, and this application already has a place where
+long-lived secrets belong — the Credential Manager, per AD-15. A digest is not a
+secret, so the token store can be an ordinary file next to the config without being an
+asset worth stealing.
+
+Constant-time comparison because the alternative leaks the prefix a byte at a time to
+anything that can time a loopback request, which on this machine is everything.
+
+**Consequence.** A user who loses the token cannot recover it and must regenerate,
+which breaks whatever client was already configured. The settings panel therefore shows
+the whole client configuration snippet at the moment the token is issued, so the normal
+path is copy-once into the client rather than copy-later from the app.
+
+---
+
+## AD-17: The MCP server is loopback-only, off by default, and speaks both shapes
+
+**Decision.** The server binds `127.0.0.1` on a preferred port, falling back to a free
+one if that port is taken. It is off until the user enables it. It exposes plain REST
+routes for a script and a JSON-RPC endpoint at `/mcp` for an MCP client, over the same
+handlers. Whether it will answer about days other than today is a separate setting, and
+every response is built from `PublicEpisode` per AD-14.
+
+**Why.** Binding `0.0.0.0` on a personal machine puts a full activity history on the
+local network behind one bearer token — a token that, per AD-16, the user has probably
+pasted into a client configuration file. There is no use for this server that another
+machine has to reach; a remote client can be given a tunnel deliberately.
+
+Both shapes exist because the two consumers are genuinely different. An MCP client
+wants `initialize`, `tools/list` and `tools/call`. A shell script or an editor extension
+wants `GET /day/2026-08-22`. Sharing the handlers means they cannot disagree about what
+the answer is.
+
+**Consequence.** The port is not stable across restarts when the preferred one is
+contended, so the client snippet is regenerated from the running server rather than
+written once. The Tauri layer reconciles the server against the settings on every
+change: it restarts when the port or the history setting moved, and does nothing when an
+unrelated setting changed, so editing an exclusion list does not drop a client's
+connection.
+
+The window and the server share one `Processor` behind a mutex rather than each opening
+their own. Two processors would each build their own in-memory search index from the
+same files, and the one the window did not use would answer searches from whatever it
+had loaded when it started.
+
+---
+
+## AD-18: The window runs outside Tauri
+
+**Decision.** Every IPC call goes through one wrapper that uses Tauri's `invoke` when
+the WebView is present and a registered mock otherwise. `src/lib/browser-mocks.ts`
+answers every command with data shaped like the backend's, holding the same invariants:
+a private episode has no title, a stored key never comes back, a token is shown once.
+`npm run dev` opens a working application in an ordinary browser.
+
+**Why.** The alternative is that no frontend change can be checked without building the
+Rust side and launching a desktop session, which is both slow and impossible headlessly.
+Tests run against the same wrapper with per-test mocks, so the frontend tests exercise
+the real components rather than shallow renders.
+
+The mocks holding the backend's invariants is the part that matters. A mock that happily
+returned a title for a private episode would let a view be written that displays one,
+and the test suite would pass. Making the mock refuse is what keeps the tests honest
+about the guarantee in AD-4.
+
+**Consequence.** There are two implementations of the IPC surface, and they can drift.
+The mock is not generated from the Rust commands and nothing checks that the two agree —
+a command renamed in Rust fails at runtime in the app while the browser build keeps
+working. `npm run build` and `cargo build` are both in the gate, but the seam between
+them is only covered by running the real application.

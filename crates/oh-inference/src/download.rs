@@ -448,7 +448,7 @@ mod tests {
         let server = FileServer::serving(content.clone(), true).await;
         let temp = tempfile::tempdir().unwrap();
 
-        let mut model = crate::catalog::find("qwen3.5-2b").unwrap();
+        let mut model = crate::catalog::find("qwen3-1.7b").unwrap();
         // Point the entry at the test server rather than reaching Hugging Face.
         let target = model.path_in(temp.path());
         model.repo = "test/repo".into();
@@ -460,7 +460,7 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), content);
         let status = crate::catalog::statuses_in(temp.path(), None)
             .into_iter()
-            .find(|status| status.model.id == "qwen3.5-2b")
+            .find(|status| status.model.id == "qwen3-1.7b")
             .unwrap();
         assert!(status.installed);
     }

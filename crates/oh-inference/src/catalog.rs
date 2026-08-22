@@ -161,11 +161,11 @@ mod tests {
         assert_eq!(
             ids,
             vec![
+                "qwen3-1.7b",
+                "phi-3-mini",
+                "qwen3-4b",
                 "gemma-4-e2b-qat",
                 "gemma-4-e4b-qat",
-                "qwen3.5-4b",
-                "phi-4-mini",
-                "qwen3.5-2b",
             ]
         );
     }
@@ -207,14 +207,14 @@ mod tests {
     #[test]
     fn a_downloaded_file_is_reported_with_its_real_size() {
         let temp = tempfile::tempdir().unwrap();
-        let model = find("qwen3.5-2b").unwrap();
+        let model = find("qwen3-1.7b").unwrap();
         let path = model.path_in(temp.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"not really a model").unwrap();
 
         let status = statuses_in(temp.path(), None)
             .into_iter()
-            .find(|status| status.model.id == "qwen3.5-2b")
+            .find(|status| status.model.id == "qwen3-1.7b")
             .unwrap();
 
         assert!(status.installed);
@@ -225,13 +225,13 @@ mod tests {
     #[test]
     fn an_empty_file_is_a_failed_download_rather_than_an_installed_model() {
         let temp = tempfile::tempdir().unwrap();
-        let path = find("phi-4-mini").unwrap().path_in(temp.path());
+        let path = find("phi-3-mini").unwrap().path_in(temp.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"").unwrap();
 
         let status = statuses_in(temp.path(), None)
             .into_iter()
-            .find(|status| status.model.id == "phi-4-mini")
+            .find(|status| status.model.id == "phi-3-mini")
             .unwrap();
         assert!(!status.installed);
     }
@@ -246,7 +246,10 @@ mod tests {
             .filter(|status| status.fits_memory)
             .map(|status| status.model.id.as_str())
             .collect();
-        assert_eq!(fitting, vec!["gemma-4-e2b-qat", "qwen3.5-2b"]);
+        assert_eq!(
+            fitting,
+            vec!["qwen3-1.7b", "phi-3-mini", "qwen3-4b", "gemma-4-e2b-qat"]
+        );
     }
 
     #[test]

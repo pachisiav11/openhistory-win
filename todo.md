@@ -1,3 +1,1 @@
-- 2026-08-22 02:16: CI actions target Node.js 20, which GitHub has deprecated and is forcing onto Node 24. Bump actions/checkout, actions/setup-node, actions/upload-artifact and actions/download-artifact to v5.
-- 2026-08-22 09:00: Final — end-to-end gate, README and ARCHITECTURE updates, release build
-- 2026-08-22 11:40: Verify the Hugging Face repository paths in crates/oh-inference/src/catalog.json against the live site. They were written without network access and no download has been run.
+Nothing outstanding.

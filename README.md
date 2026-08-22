@@ -13,8 +13,8 @@ interchangeable between the two.
 
 ## Status
 
-Under active construction, built in phases. See [`todo.md`](todo.md) for what is in
-flight and [`TODO_log.md`](TODO_log.md) for what has landed.
+All seven phases have landed. See [`todo.md`](todo.md) for what is still open and
+[`TODO_log.md`](TODO_log.md) for what has been finished.
 
 | Phase | Scope | State |
 |-------|-------|-------|
@@ -22,9 +22,14 @@ flight and [`TODO_log.md`](TODO_log.md) for what has landed.
 | 1 | Native activity collector | done |
 | 2 | Tauri shell, JSONL persistence | done |
 | 3 | Episode detection, rollups, search index | done |
-| 4 | Inference: Anthropic and local llama.cpp | pending |
-| 5 | Local MCP server | pending |
-| 6 | React frontend | pending |
+| 4 | Inference: three cloud providers and a managed llama.cpp | done |
+| 5 | Local MCP server | done |
+| 6 | React frontend | done |
+
+Two things the automated suite cannot reach are written down rather than assumed: no
+request has ever been sent to a real cloud provider, and no GGUF has ever been
+downloaded or run. Both paths are covered against local servers that speak the same
+shapes. `docs/ARCHITECTURE.md` (AD-7) lists every such gap.
 
 ## Design
 
@@ -50,8 +55,8 @@ Win32 WinEventHook + UIAutomation + power/session notifications
         v
   oh-processing (Rust)  episodes, hourly/daily rollups, inverted search index
         |
-        +--> oh-inference (Rust)  Anthropic API  |  managed llama-server
-        +--> oh-mcp       (Rust)  127.0.0.1:47123, bearer auth
+        +--> oh-inference (Rust)  Anthropic | OpenAI | Google  or  llama-server
+        +--> oh-mcp       (Rust)  127.0.0.1, bearer auth, REST and JSON-RPC
         +--> React UI     (WebView2)  timeline, search, day view, settings
 ```
 
@@ -79,9 +84,13 @@ config.json                    settings, safe to edit by hand
 events/2026-08-21.jsonl        one JSON object per line, append-only
 episodes/2026-08-21.json       that day grouped into episodes, with totals
 index/search-index.json        inverted index over every episode
-summaries/                     hourly and daily writing  (phase 4)
-models/                        downloaded GGUF files     (phase 4)
+summaries/2026-08-21.json      the hours and the day, written by a model
+models/                        downloaded GGUF files
+tokens.json                    SHA-256 digests of issued MCP tokens, never the tokens
 ```
+
+API keys are not in this tree. They go to the Windows Credential Manager, one entry
+per provider, and the app can ask whether a key exists but cannot read one back.
 
 Event logs are cut on your local date and never rewritten, so a crash can cost at most
 the event being written. Nothing is compressed or encoded — `type` and `jq` both work.
@@ -95,23 +104,54 @@ Delete `episodes/` and `index/` and they are rebuilt from the event log.
 Closing the window leaves the app recording in the tray. Quit from the tray menu to
 stop it entirely.
 
-## Local models
+## Summaries
 
-Local inference is opt-in and downloads nothing until you pick a model. When a summary
-is due the app starts `llama-server`, generates, then shuts it down after an idle
-timeout, so the resting memory cost is zero.
+Summaries are off until you choose a model. Settings offers one list, grouped by who
+runs it: three Anthropic models, three OpenAI, one Google, and any local model you have
+downloaded. Picking a model is what sets the provider — there is no second dropdown to
+keep in step.
 
-The curated catalog is tuned for laptop-class hardware:
+A cloud model needs two more things before anything is sent: that provider's API key,
+and your explicit agreement. The agreement text names exactly what goes out. A private
+session is reduced to an application and a span of time, a URL loses its query string,
+and no file path is ever included. The redaction is a type conversion rather than a
+filter, so there is no code path that could send a private title by accident.
 
-| Model | Approx. Q4 size | Notes |
-|-------|-----------------|-------|
-| Gemma 4 E2B QAT, text-only | ~0.9 GB | Official Google QAT weights. Fastest option. |
-| Gemma 4 E4B QAT, text-only | ~3–5 GB | Native structured JSON output, 128K context. |
-| Qwen3.5-4B | ~2.5–3.4 GB | Strong at reading structured input. |
-| Phi-4-mini 3.8B | ~2.3–3 GB | Best reasoning density in its size band. |
-| Qwen3.5-2B | ~1.3 GB | Light second option for battery use. |
+You can write a whole day or a single hour, rewrite either, or forget a day's summaries
+entirely. Each summary records which model wrote it.
 
-Any other GGUF works too — point Settings at the file.
+### Local models
+
+Local inference downloads nothing until you pick a model. When a summary is due the app
+starts `llama-server`, generates, then shuts it down after an idle timeout, so the
+resting memory cost is zero.
+
+The curated catalog is tuned for laptop-class hardware. Every row was read off the
+repository's own file listing rather than estimated:
+
+| Model | File | Size |
+|-------|------|------|
+| Qwen3 1.7B | `Qwen/Qwen3-1.7B-GGUF` | 1.83 GB |
+| Phi-3 mini 4k | `microsoft/Phi-3-mini-4k-instruct-gguf` | 2.39 GB |
+| Qwen3 4B | `Qwen/Qwen3-4B-GGUF` | 2.5 GB |
+| Gemma 4 E2B QAT | `google/gemma-4-E2B-it-qat-q4_0-gguf` | 3.35 GB |
+| Gemma 4 E4B QAT | `google/gemma-4-E4B-it-qat-q4_0-gguf` | 5.15 GB |
+
+Settings measures each against the machine's RAM and says which do not fit.
+
+## Answering other programs
+
+An optional MCP server lets another program on this machine — Claude Code, an editor
+extension, a shell script — ask what you have been working on. It is off by default. It
+binds `127.0.0.1` only, and every request needs a bearer token issued from Settings.
+
+The token is shown once. Only its SHA-256 digest is stored, so it cannot be shown again;
+regenerating one invalidates every earlier token. Settings prints the whole client
+configuration snippet at the moment the token is issued, ready to paste.
+
+The server answers over plain REST for a script and over JSON-RPC at `/mcp` for an MCP
+client, through the same handlers. Every response is built from the same redacted view
+the cloud providers see: summaries and episode shapes, never a raw event stream.
 
 ## Building
 
@@ -130,8 +170,11 @@ cargo tauri dev
 Release build:
 
 ```bash
-cargo tauri build
+npx tauri build
 ```
+
+That produces `target/release/openhistory-win.exe` (about 9 MB) and an NSIS installer at
+`target/release/bundle/nsis/` (about 3 MB). There is no bundled runtime in either.
 
 ## Testing
 
@@ -142,6 +185,12 @@ cargo test --workspace
 ```bash
 npm test
 ```
+
+The frontend runs outside Tauri against a mocked IPC layer, so `npm run dev` opens a
+working application in an ordinary browser and the view tests need no desktop session.
+The mocks hold the backend's invariants — a private episode has no title, a stored key
+never comes back, a token is shown once — so a view cannot be written against data the
+real backend would never produce.
 
 Some tests are `#[ignore]`d because they open real windows and need an interactive
 desktop — including the one that launches every installed browser in private mode and
