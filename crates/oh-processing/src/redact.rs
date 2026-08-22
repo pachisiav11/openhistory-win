@@ -127,9 +127,7 @@ pub fn public_episodes(episodes: &[Episode]) -> Vec<PublicEpisode> {
 /// what the browser displayed is what the user saw.
 pub fn strip_query(url: &str) -> String {
     let trimmed = url.trim();
-    let cut = trimmed
-        .find(['?', '#'])
-        .map_or(trimmed.len(), |position| position);
+    let cut = trimmed.find(['?', '#']).unwrap_or(trimmed.len());
     trimmed[..cut].trim_end_matches('/').to_owned()
 }
 
