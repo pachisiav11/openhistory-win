@@ -1,5 +1,5 @@
-- 2026-08-22 01:40: STOP HERE. Phase 3 is complete and pushed. Do not begin Phase 4 without the user asking. Read HANDOFF.md before resuming.
-- 2026-08-21 21:51: Phase 4 — Inference layer (Anthropic opt-in + app-managed llama-server, curated model catalog, on-demand load/unload)
-- 2026-08-21 21:51: Phase 5 — MCP server (127.0.0.1:47123, bearer token auth, sanitization)
-- 2026-08-21 21:51: Phase 6 — React frontend (Timeline, Search, Day View, Settings)
 - 2026-08-22 02:16: CI actions target Node.js 20, which GitHub has deprecated and is forcing onto Node 24. Bump actions/checkout, actions/setup-node, actions/upload-artifact and actions/download-artifact to v5.
+- 2026-08-22 09:00: Phase 5 — MCP server: axum on 127.0.0.1:47123 with port fallback, bearer token auth (hashed), sanitized REST endpoints, JSON-RPC MCP endpoint, IPC wiring
+- 2026-08-22 09:00: Phase 6 — React frontend: Timeline, Search, Day View, Settings (seven-model cloud dropdown, three API-key fields, local model catalog), navigation, tests
+- 2026-08-22 09:00: Final — end-to-end gate, README and ARCHITECTURE updates, release build
+- 2026-08-22 11:40: Verify the Hugging Face repository paths in crates/oh-inference/src/catalog.json against the live site. They were written without network access and no download has been run.

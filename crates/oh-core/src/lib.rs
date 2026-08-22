@@ -9,10 +9,16 @@ pub mod config;
 pub mod event;
 pub mod paths;
 pub mod store;
+pub mod summary;
 
-pub use config::{Config, DEFAULT_EXCLUDED, RecordingConfig};
+pub use config::{
+    CLOUD_MODELS, CloudModelChoice, Config, DEFAULT_CLOUD_MODEL, DEFAULT_EXCLUDED,
+    DEFAULT_MCP_PORT, InferenceConfig, InferenceProvider, McpConfig, RecordingConfig, cloud_model,
+    provider_for_model,
+};
 pub use event::{
     ActivityEvent, ApplicationDescriptor, BrowserObservation, DocumentObservation, EventKind,
     SCHEMA_VERSION, SemanticElement, TextChange,
 };
 pub use store::{DayStats, EventStore, local_date_of, read_day, today};
+pub use summary::{DaySummary, HourSummary, SummaryStore};

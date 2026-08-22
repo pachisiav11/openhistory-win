@@ -5,11 +5,13 @@
 //! this module is the wiring between them and the window.
 
 pub mod collector_service;
+pub mod summaries;
 
 use std::sync::Arc;
 
 use chrono::NaiveDate;
 use oh_core::{ActivityEvent, Config, EventStore, paths};
+use oh_inference::service::InferenceService;
 use oh_processing::{DayReport, Processor, SearchHit};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -18,6 +20,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 use collector_service::{CollectorService, Status, StatusListener};
+use summaries::SummaryState;
 
 /// Event name the interface listens on for live status.
 const STATUS_EVENT: &str = "openhistory://status";
@@ -27,19 +30,19 @@ pub struct AppState {
     config: Mutex<Config>,
     /// Derived history: episodes, rollups, and the search index. Held open because
     /// the index lives in memory and search runs on every keystroke.
-    processor: Mutex<Processor>,
+    pub(crate) processor: Mutex<Processor>,
     /// The tray's recording checkbox, kept so it can follow the real state when
     /// recording is toggled from the window rather than from the tray.
     recording_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
 }
 
 impl AppState {
-    fn config(&self) -> Config {
+    pub(crate) fn config(&self) -> Config {
         self.config.lock().clone()
     }
 
     /// Persist settings and make the tray agree with them.
-    fn apply(&self, config: Config) -> Result<(), String> {
+    pub(crate) fn apply(&self, config: Config) -> Result<(), String> {
         config.save().map_err(to_message)?;
         if let Some(item) = self.recording_item.lock().as_ref() {
             let _ = item.set_checked(config.recording_enabled);
@@ -58,11 +61,11 @@ pub struct AppInfo {
     pub data_dir: String,
 }
 
-fn to_message(error: impl std::fmt::Display) -> String {
+pub(crate) fn to_message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-fn parse_date(date: &str) -> Result<NaiveDate, String> {
+pub(crate) fn parse_date(date: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(date, "%Y-%m-%d")
         .map_err(|_| format!("{date} is not a date in YYYY-MM-DD form"))
 }
@@ -72,7 +75,7 @@ fn app_info() -> AppInfo {
     AppInfo {
         name: "OpenHistory",
         version: env!("CARGO_PKG_VERSION"),
-        phase: 3,
+        phase: 4,
         data_dir: paths::data_dir()
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
@@ -113,7 +116,10 @@ fn get_config(state: State<'_, AppState>) -> Config {
 
 /// Replace the settings wholesale and restart the collector if it is running.
 #[tauri::command]
-fn set_config(config: Config, state: State<'_, AppState>) -> Result<Config, String> {
+fn set_config(mut config: Config, state: State<'_, AppState>) -> Result<Config, String> {
+    // The window sends a model identifier; the path it lives at is resolved here so a
+    // window can never point the local provider at an arbitrary file.
+    summaries::resolve_local_model(&mut config, None)?;
     state.apply(config.clone())?;
     state.service.reconfigure(&config).map_err(to_message)?;
 
@@ -202,6 +208,12 @@ fn build_tray(app: &AppHandle, recording: bool) -> tauri::Result<CheckMenuItem<t
                 if let Some(state) = app.try_state::<AppState>() {
                     state.service.stop();
                 }
+                // The local model server is a child process. Killing it here rather
+                // than leaving it to `Drop`, which `exit` never runs.
+                if let Some(state) = app.try_state::<SummaryState>() {
+                    let service = state.service();
+                    tauri::async_runtime::block_on(service.shutdown());
+                }
                 app.exit(0);
             }
             _ => {}
@@ -281,6 +293,9 @@ pub fn run() {
                 }
             }
 
+            let inference = Arc::new(InferenceService::open()?);
+            app.manage(SummaryState::new(Arc::clone(&inference)));
+
             let recording_item = build_tray(app.handle(), config.recording_enabled)?;
             app.manage(AppState {
                 service,
@@ -310,6 +325,23 @@ pub fn run() {
             day_report,
             search_history,
             rebuild_history,
+            summaries::cloud_models,
+            summaries::use_cloud_model,
+            summaries::inference_readiness,
+            summaries::local_models,
+            summaries::download_model,
+            summaries::cancel_download,
+            summaries::remove_model,
+            summaries::use_local_model,
+            summaries::store_api_key,
+            summaries::api_keys,
+            summaries::forget_api_key,
+            summaries::day_summary,
+            summaries::summarize_day,
+            summaries::summarize_hour,
+            summaries::forget_summary,
+            summaries::local_server_status,
+            summaries::stop_local_server,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenHistory");

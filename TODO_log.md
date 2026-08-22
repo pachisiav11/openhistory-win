@@ -3,3 +3,4 @@
 - Added: 2026-08-21 21:51 | Completed: 2026-08-21 23:40 | Phase 1 — Rust activity collector (SetWinEventHook, UIAutomation, power/session events, ActivityEvent schema)
 - Added: 2026-08-21 21:51 | Completed: 2026-08-22 00:35 | Phase 2 — Tauri v2 shell wiring collector to JSONL in %APPDATA%\openhistory-win
 - Added: 2026-08-21 21:51 | Completed: 2026-08-22 02:08 | Phase 3 — Processing layer: episode detection with separate elapsed and evidenced time, hourly and daily rollups, inverted search index, on-demand day processing wired into the Tauri app and the Today view
+- Added: 2026-08-22 09:00 | Completed: 2026-08-22 11:40 | Phase 4 — Inference layer: config surface, prompt builder + sanitizer, cloud providers (Anthropic, OpenAI, Google AI Studio), model catalog, GGUF downloader, managed llama-server with idle unload, credential-manager secret storage, summary persistence, IPC wiring

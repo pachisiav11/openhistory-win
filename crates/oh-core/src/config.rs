@@ -77,6 +77,253 @@ impl RecordingConfig {
     }
 }
 
+/// Which engine writes the summaries.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InferenceProvider {
+    /// No summaries at all. The default: the application records and browses history
+    /// without any model until the user chooses one.
+    #[default]
+    Disabled,
+    /// The Anthropic Messages API.
+    Anthropic,
+    /// The OpenAI Responses API.
+    #[serde(rename = "openai")]
+    OpenAi,
+    /// The Google AI Studio Gemini API.
+    Google,
+    /// A GGUF model run by a `llama-server` this application starts and stops.
+    Local,
+}
+
+impl InferenceProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InferenceProvider::Disabled => "disabled",
+            InferenceProvider::Anthropic => "anthropic",
+            InferenceProvider::OpenAi => "openai",
+            InferenceProvider::Google => "google",
+            InferenceProvider::Local => "local",
+        }
+    }
+
+    /// The company's name, for a settings page that groups models by who runs them.
+    pub fn vendor(self) -> &'static str {
+        match self {
+            InferenceProvider::Disabled => "None",
+            InferenceProvider::Anthropic => "Anthropic",
+            InferenceProvider::OpenAi => "OpenAI",
+            InferenceProvider::Google => "Google AI Studio",
+            InferenceProvider::Local => "This machine",
+        }
+    }
+
+    /// True for the providers that send window titles and URLs off the machine.
+    pub fn is_cloud(self) -> bool {
+        matches!(
+            self,
+            InferenceProvider::Anthropic | InferenceProvider::OpenAi | InferenceProvider::Google
+        )
+    }
+}
+
+/// One entry of the cloud model dropdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudModelChoice {
+    /// The identifier sent to the provider.
+    pub id: &'static str,
+    /// What the dropdown shows.
+    pub name: &'static str,
+    pub provider: InferenceProvider,
+    pub note: &'static str,
+    /// The model reasons before answering and accepts an effort setting. Summaries ask
+    /// for the lowest effort available and leave room for the reasoning tokens, which
+    /// every one of these providers counts against the output limit.
+    pub supports_effort: bool,
+}
+
+impl CloudModelChoice {
+    /// The company that runs it.
+    pub fn vendor(&self) -> &'static str {
+        self.provider.vendor()
+    }
+}
+
+/// Every cloud model offered, as one list.
+///
+/// One dropdown rather than a provider choice followed by a model choice: the question
+/// a person is actually answering is "which model writes my summaries", and the
+/// provider follows from the answer. Only the current generation of each tier is
+/// listed; `config.json` still accepts any identifier by hand, which is the escape
+/// hatch for anyone who wants a specific snapshot.
+pub const CLOUD_MODELS: &[CloudModelChoice] = &[
+    CloudModelChoice {
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku (latest)",
+        provider: InferenceProvider::Anthropic,
+        note: "Fastest and cheapest. Enough for a two-sentence summary of an hour.",
+        supports_effort: false,
+    },
+    CloudModelChoice {
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet (latest)",
+        provider: InferenceProvider::Anthropic,
+        note: "Better at spotting the thread through a scattered day.",
+        supports_effort: true,
+    },
+    CloudModelChoice {
+        id: "claude-opus-5",
+        name: "Claude Opus (latest)",
+        provider: InferenceProvider::Anthropic,
+        note: "The most capable, and the most expensive per summary.",
+        supports_effort: true,
+    },
+    CloudModelChoice {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: InferenceProvider::OpenAi,
+        note: "The fastest and cheapest of the GPT-5.6 tiers.",
+        supports_effort: true,
+    },
+    CloudModelChoice {
+        id: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        provider: InferenceProvider::OpenAi,
+        note: "The balanced tier, at half the price of Sol.",
+        supports_effort: true,
+    },
+    CloudModelChoice {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: InferenceProvider::OpenAi,
+        note: "The flagship tier. More than a window-title summary needs.",
+        supports_effort: true,
+    },
+    CloudModelChoice {
+        // Google, unlike Anthropic, does publish moving aliases. This one follows
+        // whatever the current Flash release is, which is the right trade for a
+        // two-sentence summary: no maintenance here, and a two-week notice before
+        // anything behind it changes in a breaking way.
+        id: "gemini-flash-latest",
+        name: "Gemini Flash (latest)",
+        provider: InferenceProvider::Google,
+        note: "Google's fast tier, through an AI Studio key.",
+        supports_effort: false,
+    },
+];
+
+/// The model used when the user has not chosen one.
+///
+/// Summarizing a handful of window titles is not a task that rewards a larger model,
+/// and this is among the cheapest and fastest on the list.
+pub const DEFAULT_CLOUD_MODEL: &str = "claude-haiku-4-5";
+
+/// The catalog entry for a model identifier, when it is one of the seven offered.
+///
+/// Returns `None` for a model set by hand in `config.json`, which is treated as a
+/// plain identifier with no special request shaping.
+pub fn cloud_model(id: &str) -> Option<&'static CloudModelChoice> {
+    CLOUD_MODELS.iter().find(|choice| choice.id == id)
+}
+
+/// Which provider serves a model identifier, when the list knows it.
+pub fn provider_for_model(id: &str) -> Option<InferenceProvider> {
+    cloud_model(id).map(|choice| choice.provider)
+}
+
+/// How long `llama-server` may sit idle before it is shut down, in seconds.
+///
+/// See AD-3: the model is not held resident. Five minutes is long enough that a run of
+/// hourly summaries reuses one server, and short enough that an idle machine is not
+/// holding gigabytes for nothing.
+pub const DEFAULT_IDLE_UNLOAD_SECONDS: u64 = 300;
+
+/// How summaries get written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct InferenceConfig {
+    pub provider: InferenceProvider,
+    /// The user has been shown what leaves the machine and has agreed to it. Selecting
+    /// the Anthropic provider is not on its own enough to start sending data.
+    pub cloud_consent: bool,
+    /// The cloud model identifier. Which provider it belongs to is looked up from
+    /// [`CLOUD_MODELS`], so the window sets one field rather than two that can disagree.
+    pub cloud_model: String,
+    /// Catalog identifier of the downloaded model, when one was chosen from the list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_model_id: Option<String>,
+    /// Full path to the GGUF file to load. Set for a catalog model and for a
+    /// hand-picked one alike, so the runtime only ever has to read this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_model_path: Option<PathBuf>,
+    /// Context window handed to `llama-server`.
+    pub context_size: u32,
+    pub idle_unload_seconds: u64,
+    /// Write summaries as the day fills in, rather than only when asked.
+    pub auto_summarize: bool,
+}
+
+impl Default for InferenceConfig {
+    fn default() -> Self {
+        InferenceConfig {
+            provider: InferenceProvider::Disabled,
+            cloud_consent: false,
+            cloud_model: DEFAULT_CLOUD_MODEL.to_owned(),
+            local_model_id: None,
+            local_model_path: None,
+            context_size: 8192,
+            idle_unload_seconds: DEFAULT_IDLE_UNLOAD_SECONDS,
+            auto_summarize: false,
+        }
+    }
+}
+
+impl InferenceConfig {
+    /// True when summaries can actually be produced with these settings.
+    pub fn is_usable(&self) -> bool {
+        match self.provider {
+            InferenceProvider::Disabled => false,
+            provider if provider.is_cloud() => self.cloud_consent,
+            _ => self.local_model_path.is_some(),
+        }
+    }
+
+    /// The chosen cloud model's catalog entry, when it is one of the offered ones.
+    pub fn choice(&self) -> Option<&'static CloudModelChoice> {
+        cloud_model(&self.cloud_model)
+    }
+}
+
+/// The port the plan fixes for the local MCP server.
+pub const DEFAULT_MCP_PORT: u16 = 47123;
+
+/// The local server other tools read history through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct McpConfig {
+    /// Off until the user turns it on. An open port that answers questions about what
+    /// its owner has been doing is not something to start by default.
+    pub enabled: bool,
+    /// Preferred port. If it is taken, the server binds the next free one and reports
+    /// where it actually landed.
+    pub port: u16,
+    /// Answer questions about days other than today. Turning this off narrows an
+    /// enabled server to the current day, which is what an assistant helping with the
+    /// work in front of you actually needs.
+    pub allow_history: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        McpConfig {
+            enabled: false,
+            port: DEFAULT_MCP_PORT,
+            allow_history: true,
+        }
+    }
+}
+
 /// Everything the user can change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -90,6 +337,8 @@ pub struct Config {
     /// personal history that silently deletes itself is not one you can rely on.
     pub retention_days: u32,
     pub recording: RecordingConfig,
+    pub inference: InferenceConfig,
+    pub mcp: McpConfig,
 }
 
 impl Default for Config {
@@ -99,6 +348,8 @@ impl Default for Config {
             start_on_launch: true,
             retention_days: 0,
             recording: RecordingConfig::default(),
+            inference: InferenceConfig::default(),
+            mcp: McpConfig::default(),
         }
     }
 }
@@ -240,6 +491,134 @@ mod tests {
             "{ this is not json",
             "the original must be recoverable by hand"
         );
+    }
+
+    #[test]
+    fn summaries_are_off_until_a_provider_is_chosen_and_configured() {
+        let mut inference = InferenceConfig::default();
+        assert_eq!(inference.provider, InferenceProvider::Disabled);
+        assert!(!inference.is_usable());
+
+        // Selecting the cloud provider is not on its own consent to use it.
+        inference.provider = InferenceProvider::Anthropic;
+        assert!(!inference.is_usable());
+        inference.cloud_consent = true;
+        assert!(inference.is_usable());
+
+        // The local provider needs a model on disk, consent or not.
+        inference.provider = InferenceProvider::Local;
+        assert!(!inference.is_usable());
+        inference.local_model_path = Some(PathBuf::from("C:/models/gemma.gguf"));
+        assert!(inference.is_usable());
+    }
+
+    #[test]
+    fn the_mcp_server_is_off_by_default_on_the_agreed_port() {
+        let mcp = McpConfig::default();
+        assert!(!mcp.enabled);
+        assert_eq!(mcp.port, DEFAULT_MCP_PORT);
+    }
+
+    #[test]
+    fn a_phase_three_config_file_gains_the_new_sections_at_their_defaults() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"recordingEnabled": true, "startOnLaunch": false, "retentionDays": 30}"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert!(!config.start_on_launch);
+        assert_eq!(config.retention_days, 30);
+        assert_eq!(config.inference, InferenceConfig::default());
+        assert_eq!(config.mcp, McpConfig::default());
+    }
+
+    #[test]
+    fn the_dropdown_offers_seven_models_across_three_providers() {
+        let ids: Vec<&str> = CLOUD_MODELS.iter().map(|choice| choice.id).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "claude-haiku-4-5",
+                "claude-sonnet-5",
+                "claude-opus-5",
+                "gpt-5.6-luna",
+                "gpt-5.6-terra",
+                "gpt-5.6-sol",
+                "gemini-flash-latest",
+            ]
+        );
+        assert!(
+            ids.iter()
+                .all(|id| !id.contains("2025") && !id.contains("2026")),
+            "a dated snapshot identifier will go stale: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn every_offered_model_names_the_provider_that_serves_it() {
+        for choice in CLOUD_MODELS {
+            assert!(
+                choice.provider.is_cloud(),
+                "{} is not served by a cloud provider",
+                choice.id
+            );
+            assert_eq!(provider_for_model(choice.id), Some(choice.provider));
+            assert!(!choice.name.is_empty() && !choice.note.is_empty());
+        }
+        assert_eq!(
+            provider_for_model("gpt-5.6-luna"),
+            Some(InferenceProvider::OpenAi)
+        );
+        assert_eq!(
+            provider_for_model("gemini-flash-latest"),
+            Some(InferenceProvider::Google)
+        );
+        assert_eq!(provider_for_model("something-else"), None);
+    }
+
+    #[test]
+    fn the_default_model_is_one_of_the_offered_ones() {
+        assert_eq!(InferenceConfig::default().cloud_model, DEFAULT_CLOUD_MODEL);
+        assert!(cloud_model(DEFAULT_CLOUD_MODEL).is_some());
+    }
+
+    #[test]
+    fn the_models_that_reason_are_marked_as_such() {
+        assert!(!cloud_model("claude-haiku-4-5").unwrap().supports_effort);
+        assert!(cloud_model("claude-sonnet-5").unwrap().supports_effort);
+        assert!(cloud_model("claude-opus-5").unwrap().supports_effort);
+        assert!(cloud_model("gpt-5.6-luna").unwrap().supports_effort);
+        assert!(!cloud_model("gemini-flash-latest").unwrap().supports_effort);
+    }
+
+    #[test]
+    fn a_provider_serializes_under_the_name_the_window_uses() {
+        let json = serde_json::to_string(&InferenceProvider::OpenAi).unwrap();
+        assert_eq!(json, r#""openai""#);
+        assert_eq!(InferenceProvider::OpenAi.as_str(), "openai");
+        assert_eq!(
+            serde_json::from_str::<InferenceProvider>(r#""google""#).unwrap(),
+            InferenceProvider::Google
+        );
+    }
+
+    #[test]
+    fn a_model_set_by_hand_is_accepted_and_left_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"inference":{"provider":"anthropic","cloudModel":"claude-opus-4-8"}}"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.inference.cloud_model, "claude-opus-4-8");
+        assert!(config.inference.choice().is_none());
     }
 
     #[test]

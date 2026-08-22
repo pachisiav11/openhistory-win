@@ -1,0 +1,62 @@
+[
+  {
+    "id": "gemma-4-e2b-qat",
+    "name": "Gemma 4 E2B (QAT)",
+    "vendor": "Google",
+    "parameters": "2B effective",
+    "quantization": "Q4_0 quantization-aware",
+    "repo": "google/gemma-4-e2b-it-qat-GGUF",
+    "file": "gemma-4-e2b-it-qat-q4_0.gguf",
+    "approximateBytes": 1600000000,
+    "recommendedRamBytes": 6000000000,
+    "note": "The smallest of the five. Quantization-aware training keeps it close to the full model at this size. Text only — the vision tower is not downloaded."
+  },
+  {
+    "id": "gemma-4-e4b-qat",
+    "name": "Gemma 4 E4B (QAT)",
+    "vendor": "Google",
+    "parameters": "4B effective",
+    "quantization": "Q4_0 quantization-aware",
+    "repo": "google/gemma-4-e4b-it-qat-GGUF",
+    "file": "gemma-4-e4b-it-qat-q4_0.gguf",
+    "approximateBytes": 3000000000,
+    "recommendedRamBytes": 10000000000,
+    "note": "Noticeably better at summarizing a mixed day than E2B, for roughly twice the memory. Text only."
+  },
+  {
+    "id": "qwen3.5-4b",
+    "name": "Qwen3.5 4B Instruct",
+    "vendor": "Alibaba",
+    "parameters": "4B",
+    "quantization": "Q4_K_M",
+    "repo": "Qwen/Qwen3.5-4B-Instruct-GGUF",
+    "file": "Qwen3.5-4B-Instruct-Q4_K_M.gguf",
+    "approximateBytes": 2600000000,
+    "recommendedRamBytes": 9000000000,
+    "note": "Strong at following a fixed output shape, which is most of what summarizing a day asks for."
+  },
+  {
+    "id": "phi-4-mini",
+    "name": "Phi-4 mini",
+    "vendor": "Microsoft",
+    "parameters": "3.8B",
+    "quantization": "Q4_K_M",
+    "repo": "microsoft/Phi-4-mini-instruct-GGUF",
+    "file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+    "approximateBytes": 2500000000,
+    "recommendedRamBytes": 9000000000,
+    "note": "Concise by temperament, which suits a two-sentence hourly summary."
+  },
+  {
+    "id": "qwen3.5-2b",
+    "name": "Qwen3.5 2B Instruct",
+    "vendor": "Alibaba",
+    "parameters": "2B",
+    "quantization": "Q4_K_M",
+    "repo": "Qwen/Qwen3.5-2B-Instruct-GGUF",
+    "file": "Qwen3.5-2B-Instruct-Q4_K_M.gguf",
+    "approximateBytes": 1500000000,
+    "recommendedRamBytes": 6000000000,
+    "note": "The fastest option on a machine without a usable GPU."
+  }
+]
