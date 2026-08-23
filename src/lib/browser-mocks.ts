@@ -25,6 +25,7 @@ import {
   type Episode,
   type HourlyRollup,
   type KeyStatus,
+  type LibraryEntry,
   type LlamaStatus,
   type LocalModel,
   type McpHandle,
@@ -101,6 +102,8 @@ function sampleEpisodes(): Episode[] {
       title: "collector.rs - openhistory-win",
       titles: ["collector.rs - openhistory-win", "store.rs - openhistory-win"],
       urls: [],
+      documents: ["collector.rs", "store.rs"],
+      visibleText: ["Problems", "Terminal", "fn report_window"],
       start: minutesAgo(45),
       end: minutesAgo(22),
       durationMs: 23 * 60_000,
@@ -117,6 +120,7 @@ function sampleEpisodes(): Episode[] {
       appPath: String.raw`C:\chrome\chrome.exe`,
       title: "Win32 accessibility - Google Chrome",
       titles: ["Win32 accessibility - Google Chrome"],
+      visibleText: ["UI Automation Overview", "Control Patterns"],
       urls: ["https://learn.microsoft.com/windows/win32/winauto/"],
       start: minutesAgo(21),
       end: minutesAgo(13),
@@ -323,7 +327,12 @@ export function installBrowserMocks(): void {
     startOnLaunch: true,
     startWithWindows: true,
     retentionDays: 0,
-    recording: { excludedApps: ["1password", "bitwarden", "keepassxc"], captureUrls: true },
+    recording: {
+      excludedApps: ["1password", "bitwarden", "keepassxc"],
+      captureUrls: true,
+      captureDocuments: true,
+      captureVisibleText: true,
+    },
     inference: {
       provider: "disabled",
       cloudConsent: false,
@@ -651,6 +660,57 @@ export function installBrowserMocks(): void {
   mockCommand("forget_mcp_tokens", (): McpStatus => {
     mcp = { ...mcp, hasToken: false };
     return mcp;
+  });
+
+  // The library is a real store in the app. Here it is an ordinary object, so the
+  // preview can save, read, delete and fail to export exactly as the app does.
+  const library = new Map<string, { entry: LibraryEntry; body: string }>();
+
+  mockCommand("library_entries", (): LibraryEntry[] =>
+    [...library.values()]
+      .map((one) => one.entry)
+      .sort((a, b) => b.savedAt.localeCompare(a.savedAt)),
+  );
+  mockCommand("library_document", (args): string => {
+    const found = library.get(String(args?.id));
+    if (!found) throw new Error("that document is no longer in the library");
+    return found.body;
+  });
+  mockCommand("library_save", (args): LibraryEntry => {
+    const date = String(args?.date);
+    const report = date === localToday() ? sampleReport() : emptyReport(date);
+    const written = summaries.get(date);
+    const body = [
+      `# ${date}`,
+      "",
+      written?.daily ?? "No whole-day summary was written.",
+      "",
+      "## Where the time went",
+      "",
+      `${Math.round((report.rollup.activeMs + report.rollup.idleMs) / 60_000)}m at the machine.`,
+      "",
+      ...report.rollup.apps.map((one) => `- ${one.app} — ${Math.round(one.activeMs / 60_000)}m`),
+    ].join("\n");
+
+    let id = date;
+    for (let n = 2; library.has(id); n += 1) id = `${date}-${n}`;
+    const entry: LibraryEntry = {
+      id,
+      title: date,
+      date,
+      savedAt: new Date().toISOString(),
+      bytes: body.length,
+    };
+    library.set(id, { entry, body });
+    return entry;
+  });
+  mockCommand("library_delete", (args): void => {
+    library.delete(String(args?.id));
+  });
+  mockCommand("library_export", (): string | null => {
+    // A browser tab has no save dialog to open, and pretending otherwise would show
+    // a success the app cannot deliver here.
+    throw new Error("exporting needs the desktop application");
   });
 
   mockCommand("mcp_client_config", (args): string => {

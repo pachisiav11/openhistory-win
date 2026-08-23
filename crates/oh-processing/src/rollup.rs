@@ -290,6 +290,8 @@ mod tests {
             title: None,
             titles: Vec::new(),
             urls: Vec::new(),
+            documents: Vec::new(),
+            visible_text: Vec::new(),
             start: start.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             end: end.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             duration_ms: Duration::minutes(minutes).num_milliseconds(),

@@ -117,7 +117,7 @@ pub struct TextChange {
     pub deleted: Option<String>,
 }
 
-/// The document open in the foreground window. Reserved; not produced on Windows.
+/// The document open in the foreground window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentObservation {
@@ -125,6 +125,32 @@ pub struct DocumentObservation {
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+impl DocumentObservation {
+    /// What a person would call this document.
+    ///
+    /// The title when the application published one, and otherwise the last segment
+    /// of the path: `C:\work\budget-2026.xlsx` is a location, `budget-2026.xlsx` is
+    /// what they were working on. Only the label is ever shown, summarized or sent —
+    /// the path names the machine's layout and stays in the event log.
+    pub fn label(&self) -> Option<String> {
+        if let Some(title) = self
+            .title
+            .as_ref()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+        {
+            return Some(title.to_owned());
+        }
+        let path = self.path.as_ref()?.trim().trim_end_matches(['/', '\\']);
+        let name = path.rsplit(['/', '\\']).next()?.trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.path.is_none() && self.title.is_none()
+    }
 }
 
 /// One observation of what the user was doing.
@@ -205,6 +231,22 @@ impl ActivityEvent {
 
     pub fn with_browser(mut self, browser: BrowserObservation) -> Self {
         self.browser = Some(browser);
+        self
+    }
+
+    /// Attach the document the window is on. Absent when there is none to report.
+    pub fn with_document(mut self, document: DocumentObservation) -> Self {
+        self.document = Some(document);
+        self
+    }
+
+    /// Attach the text the window was displaying. An empty list is left absent, so a
+    /// window that showed nothing readable is indistinguishable from one that was
+    /// never read — which is true, and is the safer of the two to record.
+    pub fn with_visible_text(mut self, lines: Vec<String>) -> Self {
+        if !lines.is_empty() {
+            self.visible_text = Some(lines);
+        }
         self
     }
 
@@ -339,6 +381,61 @@ mod tests {
             serde_json::to_value(&event).unwrap(),
             raw,
             "re-serialization must be lossless"
+        );
+    }
+
+    #[test]
+    fn a_document_is_labelled_by_its_name_rather_than_its_location() {
+        let titled = DocumentObservation {
+            path: Some(r"C:\Users\someone\Documents\budget-2026.xlsx".into()),
+            title: Some("Budget 2026".into()),
+        };
+        assert_eq!(titled.label().as_deref(), Some("Budget 2026"));
+
+        let untitled = DocumentObservation {
+            path: Some(r"C:\Users\someone\Documents\budget-2026.xlsx".into()),
+            title: None,
+        };
+        assert_eq!(untitled.label().as_deref(), Some("budget-2026.xlsx"));
+
+        let web = DocumentObservation {
+            path: Some("https://docs.example.com/spec/overview".into()),
+            title: None,
+        };
+        assert_eq!(web.label().as_deref(), Some("overview"));
+
+        let nothing = DocumentObservation {
+            path: None,
+            title: None,
+        };
+        assert_eq!(nothing.label(), None);
+        assert!(nothing.is_empty());
+    }
+
+    #[test]
+    fn a_document_and_visible_text_serialize_under_the_frozen_names() {
+        let event = ActivityEvent::at(EventKind::WindowChanged, fixed())
+            .with_document(DocumentObservation {
+                path: Some(r"C:\work\notes.md".into()),
+                title: Some("notes.md".into()),
+            })
+            .with_visible_text(vec!["Preview".into(), "Outline".into()]);
+
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["document"]["path"], json!(r"C:\work\notes.md"));
+        assert_eq!(value["document"]["title"], json!("notes.md"));
+        assert_eq!(value["visibleText"], json!(["Preview", "Outline"]));
+    }
+
+    #[test]
+    fn a_window_that_showed_nothing_readable_records_no_visible_text_field() {
+        let event = ActivityEvent::at(EventKind::WindowChanged, fixed()).with_visible_text(vec![]);
+        assert_eq!(event.visible_text, None);
+        assert!(
+            !serde_json::to_string(&event)
+                .unwrap()
+                .contains("visibleText"),
+            "an empty read must be absent rather than an empty list"
         );
     }
 

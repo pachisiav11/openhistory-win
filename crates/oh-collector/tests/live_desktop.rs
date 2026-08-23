@@ -348,3 +348,65 @@ fn excluded_applications_are_never_reported() {
         "an excluded application reached the event stream: {leaked:?}"
     );
 }
+
+#[test]
+#[ignore = "launches a window and needs an interactive desktop"]
+fn reads_what_a_real_window_is_showing() {
+    let (tx, events) = mpsc::channel();
+    let collector = start_collector(
+        Box::new(move |event| {
+            let _ = tx.send(event);
+        }),
+        CollectorConfig::default(),
+    )
+    .expect("collector must start");
+
+    let mut seen = Vec::new();
+    wait_for(&events, &mut seen, |e| {
+        e.kind == EventKind::CollectorStarted
+    })
+    .expect("collectorStarted must be the first thing reported");
+
+    // Character Map is a plain Win32 window with a lot of labelled interface: group
+    // boxes, buttons and a font list. If a real window's text can be read at all,
+    // it can be read here.
+    let mut child = std::process::Command::new("charmap.exe")
+        .spawn()
+        .expect("charmap must launch");
+
+    let observed = wait_for(&events, &mut seen, |e| {
+        e.application
+            .as_ref()
+            .is_some_and(|a| a.path.to_ascii_lowercase().ends_with("charmap.exe"))
+            && e.visible_text.is_some()
+    });
+
+    let observed = observed.unwrap_or_else(|| {
+        let _ = child.kill();
+        panic!(
+            "no window observation carrying visible text for charmap. Saw:\n{}",
+            describe(&seen)
+        )
+    });
+
+    let lines = observed.visible_text.as_ref().unwrap();
+    assert!(
+        !lines.is_empty(),
+        "an absent read must not be an empty list"
+    );
+    assert!(
+        lines.len() <= oh_collector::text::MAX_LINES,
+        "the budget was exceeded: {lines:?}"
+    );
+    for line in lines {
+        assert!(
+            line.chars().count() <= oh_collector::text::MAX_LINE_CHARS,
+            "a line was over budget: {line}"
+        );
+    }
+    println!("charmap showed: {lines:?}");
+
+    child.kill().expect("charmap must be killable");
+    let _ = child.wait();
+    collector.stop();
+}

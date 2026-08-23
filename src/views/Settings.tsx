@@ -197,6 +197,35 @@ export default function Settings({ onChanged }: Props) {
       <section className="panel" aria-label="Recording">
         <h3 className="panel__title">Recording</h3>
 
+        <div className="records">
+          <div className="records__half">
+            <p className="records__head">What it records</p>
+            <ul className="records__list">
+              <li>The application in front of you, and the title of its window.</li>
+              <li>The address of the page in a browser, without the query string.</li>
+              <li>The name of the document or file a window is on.</li>
+              <li>A little of the text a window is showing, with digits and anything that looks like a secret taken out.</li>
+              <li>When the screen locked, slept and woke.</li>
+            </ul>
+          </div>
+          <div className="records__half">
+            <p className="records__head">What it never records</p>
+            <ul className="records__list">
+              <li>Screenshots, the screen itself, the camera, the microphone, or any audio.</li>
+              <li>Key presses, clicks, or where the pointer went.</li>
+              <li>The clipboard, or the contents of a file.</li>
+              <li>Anything at all while a password field has the focus.</li>
+              <li>Anything from a private browser window, or from an application on the never-recorded list below.</li>
+            </ul>
+          </div>
+        </div>
+        <p className="panel__hint">
+          Time with nothing happening is worked out from the gaps between the events above.
+          Nothing watches the keyboard or the pointer to measure it. All of it is written to
+          this machine, and only a reduced description leaves it, and only if you choose a cloud
+          model for summaries below.
+        </p>
+
         <label className="field field--check">
           <input
             type="checkbox"
@@ -234,6 +263,40 @@ export default function Settings({ onChanged }: Props) {
             }
           />
           <span>Record the address of the page in the browser</span>
+        </label>
+
+        <label className="field field--check">
+          <input
+            type="checkbox"
+            checked={config.recording.captureDocuments}
+            onChange={(event) =>
+              save((current) => ({
+                ...current,
+                recording: { ...current.recording, captureDocuments: event.target.checked },
+              }))
+            }
+          />
+          <span>
+            Record the document a window is on: the name of the spreadsheet, never a cell of it
+          </span>
+        </label>
+
+        <label className="field field--check">
+          <input
+            type="checkbox"
+            checked={config.recording.captureVisibleText}
+            onChange={(event) =>
+              save((current) => ({
+                ...current,
+                recording: { ...current.recording, captureVisibleText: event.target.checked },
+              }))
+            }
+          />
+          <span>
+            Record a little of the text a window is showing. At most a dozen short lines, read
+            once every thirty seconds, with password fields, long runs of digits and anything
+            that looks like a key or a token removed before it is written
+          </span>
         </label>
 
         <label className="field">
@@ -336,7 +399,9 @@ export default function Settings({ onChanged }: Props) {
             {provider !== "disabled" && provider !== "local" && chosen
               ? chosen.vendor
               : "a cloud provider"}
-            . Private sessions become an application and a span of time, addresses lose their
+            . That description carries application names, window titles, the names of the
+            documents you were on and a few lines of the text those windows were showing.
+            Private sessions become an application and a span of time, addresses lose their
             query strings, and no file path ever leaves this machine. Nothing is sent while the
             model above is “No summaries” or one on this machine.
           </span>

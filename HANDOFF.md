@@ -51,7 +51,7 @@ Git flow agreed with the user: one commit per phase on `main`, tagged `phase-N`,
 
 ### Phase 6 — the window
 
-- `src/App.tsx` — four-view shell, status header, Pause/Resume, and a `revision` counter
+- `src/App.tsx` — five-view shell, status header, Pause/Resume, and a `revision` counter
   bumped 800 ms after the last status push. Views reload from that rather than each
   subscribing separately.
 - `src/views/Timeline.tsx` — episodes grouped by the hour they started, never split
@@ -62,7 +62,12 @@ Git flow agreed with the user: one commit per phase on `main`, tagged `phase-N`,
   the backend's own reason.
 - `src/views/Settings.tsx` — recording, the one-list model dropdown, per-provider keys,
   the local catalog with live progress, the MCP section, and deleting all history.
-- `src/lib/browser-mocks.ts` — the whole application runs in a plain browser. See AD-18.
+- `src/views/Summary.tsx` — the day composed into one Markdown document, and the library
+  of days that were kept. Reads through `src/lib/markdown.ts`, which covers exactly the
+  grammar `src-tauri/src/library.rs::compose` emits and nothing else. See AD-25.
+- `src/lib/browser-mocks.ts` — the whole application runs in a plain browser, including a
+  working in-memory library. Exporting is the one command that refuses there, because a
+  browser tab has no save dialog and a pretended success would be a lie. See AD-18.
 
 Backend additions Phase 6 needed: `EventStore::delete_all` (closes the open log first,
 because Windows will not remove a file this process holds), `SummaryStore::clear`,
@@ -75,8 +80,8 @@ Everything below was run and passed:
 
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
-- `cargo test --workspace` — 258 passed, 0 failed.
-- `npm test` — 58 passed.
+- `cargo test --workspace` — 297 passed, 0 failed, 10 ignored.
+- `npm test` — 76 passed.
 - `npm run build` and `npx tsc --noEmit` — clean.
 - The golden path driven in the browser preview: choose a model, store a key, give
   consent, enable the MCP server and see a token once, read the client snippet, write a
@@ -121,6 +126,17 @@ in a row, that is new and worth reading properly.
   `describe` now refuses our own windows, and the collector releases its caller before
   taking the snapshot. See AD-19.
 
+- **A UIAutomation walk is a cross-process call per step.** Reading the text a window is
+  showing has to be bounded by breadth *and* depth, not just by how much text is kept, or
+  a large document view costs more than the interval between window switches and the
+  collector starts measuring its own latency. `uia::visible_text` stops at 80 elements,
+  4 levels, 24 children per node, and reads a given window at most once every thirty
+  seconds. See AD-24.
+- **Redaction that only guards the network does not guard the disk.** `oh-collector/src/
+  text.rs` runs before anything is written, not before anything is sent. It is
+  deliberately eager — a twenty-character run of mixed letters and digits is dropped
+  whether it is an API key or a genuine word — because the two failures are not
+  symmetrical. A test documents the trade so nobody "fixes" it.
 - **jsdom implements no scrolling at all.** `Element.prototype.scrollIntoView` is
   undefined there, so a view that scrolls a row into sight throws in the test suite for a
   reason that has nothing to do with the view. `src/test/setup.ts` stubs it.

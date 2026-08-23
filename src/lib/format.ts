@@ -31,3 +31,17 @@ export function clockTime(timestamp: string): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(when.getHours())}:${pad(when.getMinutes())}`;
 }
+
+/** A date `days` away from the given one, in the same YYYY-MM-DD form. */
+export function shiftDate(date: string, days: number): string {
+  const [year, month, day] = date.split("-").map(Number);
+  const moved = new Date(year ?? 1970, (month ?? 1) - 1, (day ?? 1) + days);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${moved.getFullYear()}-${pad(moved.getMonth() + 1)}-${pad(moved.getDate())}`;
+}
+
+/** A size in bytes as `820 bytes` or `2.1 kB`. */
+export function fileSize(bytes: number): string {
+  if (bytes < 1000) return `${Math.max(0, Math.round(bytes))} bytes`;
+  return `${(bytes / 1000).toFixed(1)} kB`;
+}

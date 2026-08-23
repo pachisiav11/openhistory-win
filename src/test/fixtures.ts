@@ -11,6 +11,7 @@ import {
   type Episode,
   type HourlyRollup,
   type KeyStatus,
+  type LibraryEntry,
   type LocalModel,
   type McpStatus,
   type Readiness,
@@ -93,7 +94,12 @@ export function config(overrides: Partial<Config> = {}): Config {
     startOnLaunch: true,
     startWithWindows: true,
     retentionDays: 0,
-    recording: { excludedApps: ["1password"], captureUrls: true },
+    recording: {
+      excludedApps: ["1password"],
+      captureUrls: true,
+      captureDocuments: true,
+      captureVisibleText: true,
+    },
     inference: {
       provider: "disabled",
       cloudConsent: false,
@@ -146,6 +152,17 @@ export function keys(stored: string[] = []): KeyStatus[] {
   ];
 }
 
+export function libraryEntry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
+  return {
+    id: "2026-08-21",
+    title: "Friday 21 August 2026",
+    date: "2026-08-21",
+    savedAt: "2026-08-21T18:00:00.000Z",
+    bytes: 420,
+    ...overrides,
+  };
+}
+
 export function summary(overrides: Partial<DaySummary> = {}): DaySummary {
   return { date: localDate(), hours: [], ...overrides };
 }
@@ -188,6 +205,11 @@ export function backend(
   mockCommand("local_server_status", () => ({ running: false, managed: false }));
   mockCommand("day_summary", (args) => summary({ date: String(args?.date ?? localDate()) }));
   mockCommand("mcp_status", (): McpStatus => overrides.mcp ?? { running: false, hasToken: false });
+  mockCommand("library_entries", (): LibraryEntry[] => []);
+  mockCommand("library_save", (args): LibraryEntry => libraryEntry({ date: String(args?.date) }));
+  mockCommand("library_document", () => "# A day\n\nIt went well.");
+  mockCommand("library_delete", () => undefined);
+  mockCommand("library_export", () => null);
   mockCommand("stop_collector", () => {
     currentStatus = { ...currentStatus, running: false };
     return currentStatus;

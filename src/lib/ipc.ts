@@ -102,6 +102,10 @@ export interface Status {
 export interface RecordingConfig {
   excludedApps: string[];
   captureUrls: boolean;
+  /** Record the name of the document each window is on. */
+  captureDocuments: boolean;
+  /** Record a bounded, redacted sample of the text a window is showing. */
+  captureVisibleText: boolean;
 }
 
 export type InferenceProvider = "disabled" | "anthropic" | "openai" | "google" | "local";
@@ -176,6 +180,10 @@ export interface Episode {
   title?: string;
   titles?: string[];
   urls?: string[];
+  /** Documents worked on, by name. The location stays in the event log. */
+  documents?: string[];
+  /** Lines of interface text, already bounded and redacted when recorded. */
+  visibleText?: string[];
   start: string;
   end: string;
   durationMs: number;
@@ -394,6 +402,26 @@ export const regenerateMcpToken = () => invoke<string>("regenerate_mcp_token");
 export const forgetMcpTokens = () => invoke<McpStatus>("forget_mcp_tokens");
 export const mcpClientConfig = (token?: string) =>
   invoke<string>("mcp_client_config", token ? { token } : {});
+
+/* ── The summary library ────────────────────────────────────────────────────── */
+
+/** One saved summary, described without reading its body. */
+export interface LibraryEntry {
+  id: string;
+  title: string;
+  /** The local day the document describes. */
+  date: string;
+  savedAt: string;
+  bytes: number;
+}
+
+export const libraryEntries = () => invoke<LibraryEntry[]>("library_entries");
+export const libraryDocument = (id: string) => invoke<string>("library_document", { id });
+export const librarySave = (date: string) => invoke<LibraryEntry>("library_save", { date });
+export const libraryDelete = (id: string) => invoke<void>("library_delete", { id });
+
+/** Write a copy wherever the user chooses. Null when they dismissed the dialog. */
+export const libraryExport = (id: string) => invoke<string | null>("library_export", { id });
 
 /* ── Settings and data ──────────────────────────────────────────────────────── */
 

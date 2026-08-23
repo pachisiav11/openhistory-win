@@ -1,9 +1,10 @@
 # OpenHistory for Windows
 
 A local-first activity history for Windows 11. It records what you worked on — the
-foreground application, the window title, the browser URL, and session events like
-lock and wake — groups that raw stream into coherent episodes, and turns each hour
-and each day into a short written summary you can read or query.
+foreground application, the window title, the browser URL, the document a window is
+on, a little of the text that window is showing, and session events like lock and
+wake — groups that raw stream into coherent episodes, and turns each hour and each day
+into a short written summary you can read, keep or query.
 
 Everything stays on your machine unless you explicitly turn on a cloud provider.
 
@@ -57,20 +58,48 @@ Win32 WinEventHook + UIAutomation + power/session notifications
         |
         +--> oh-inference (Rust)  Anthropic | OpenAI | Google  or  llama-server
         +--> oh-mcp       (Rust)  127.0.0.1, bearer auth, REST and JSON-RPC
-        +--> React UI     (WebView2)  timeline, search, day view, settings
+        +--> React UI     (WebView2)  timeline, search, day, summary, settings
 ```
 
 ## Privacy
 
-The app reads window titles and browser URLs, so it treats that data carefully by
-default.
+The same statement is at the top of the Recording panel in Settings, because a promise
+you have to go looking for is not much of a promise.
+
+**What it records**
+
+- The application in front of you, and the title of its window.
+- The address of the page in a browser, without the query string.
+- The name of the document or file a window is on — the name of the spreadsheet, never
+  a cell of it.
+- A little of the text a window is showing: at most a dozen short lines, read at most
+  once every thirty seconds per window, with long runs of digits masked and anything
+  shaped like a key, a token or a private key dropped before it is written.
+- When the screen locked, slept and woke.
+
+**What it never records**
+
+- Screenshots, the screen itself, the camera, the microphone, or any audio.
+- Key presses, clicks, or where the pointer went.
+- The clipboard, or the contents of a file.
+- Anything at all while a password field has the focus.
+- Anything from a private browser window, or from an application you have excluded.
+
+Each of the last three in the first list is a switch in Settings, so you can keep the
+window titles and turn the rest off. Time with nothing happening is worked out from the
+gaps between the events above; nothing watches the keyboard or the pointer to measure
+it.
+
+The rest of the guarantees behave the same way as before:
 
 - Private and incognito browser windows emit a `privacyBoundary` event and nothing else.
   Detection reads the accessibility tree, not the window title, because current Chrome
   no longer marks an incognito window in its title at all. A browser window the app
   cannot inspect is treated as private rather than assumed safe.
-- Password fields are never read; UIAutomation reports them and they are skipped.
+- Password fields are never read; UIAutomation reports them and they are skipped, both
+  for the focused field and for every element of the visible-text walk.
 - Password managers are excluded out of the box, and you can exclude any application.
+  An excluded application produces no event at all, not a redacted one.
 - No activity data leaves the machine until you turn on a cloud provider and confirm it.
 - Local summarization runs entirely offline once a model is downloaded.
 - MCP responses expose summaries, never raw event streams.
@@ -85,6 +114,7 @@ events/2026-08-21.jsonl        one JSON object per line, append-only
 episodes/2026-08-21.json       that day grouped into episodes, with totals
 index/search-index.json        inverted index over every episode
 summaries/2026-08-21.json      the hours and the day, written by a model
+library/2026-08-21.md          a day you chose to keep, Markdown with front matter
 models/                        downloaded GGUF files
 tokens.json                    SHA-256 digests of issued MCP tokens, never the tokens
 ```
@@ -129,13 +159,29 @@ downloaded. Picking a model is what sets the provider — there is no second dro
 keep in step.
 
 A cloud model needs two more things before anything is sent: that provider's API key,
-and your explicit agreement. The agreement text names exactly what goes out. A private
-session is reduced to an application and a span of time, a URL loses its query string,
-and no file path is ever included. The redaction is a type conversion rather than a
-filter, so there is no code path that could send a private title by accident.
+and your explicit agreement. The agreement text names exactly what goes out:
+application names, window titles, the names of the documents you were on, and a few
+lines of the text those windows were showing. A private session is reduced to an
+application and a span of time, a URL loses its query string, and no file path is ever
+included — the episode carries the document's name, never where it lives. The redaction
+is a type conversion rather than a filter, so there is no code path that could send a
+private title by accident.
 
 You can write a whole day or a single hour, rewrite either, or forget a day's summaries
 entirely. Each summary records which model wrote it.
+
+### Keeping a day
+
+Everything above is derived and disposable: forget a day, or let the retention window
+pass, and the numbers behind it go too. The Summary tab — reachable from the tab bar or
+from the button beside the day's title — composes a day into one Markdown document and
+keeps it under `library/`. The document carries the day's summary, where the time went,
+and each hour that was written, so it still reads as an account of the day once it is
+nowhere near the application.
+
+Saved days are listed, read and removed in the same tab, and exported anywhere through
+an ordinary Save-as dialog. Removing one asks first. Nothing else in the application
+deletes them.
 
 ### Local models
 

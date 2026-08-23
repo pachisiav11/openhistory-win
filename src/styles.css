@@ -305,6 +305,12 @@ body {
   gap: 6px;
 }
 
+.section__lead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
 /* ── Timeline hours ─────────────────────────────────────────────────────────── */
 
 .hour {
@@ -578,6 +584,37 @@ body {
 
 /* ── Settings ───────────────────────────────────────────────────────────────── */
 
+.records {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.records__head {
+  margin: 0 0 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.records__list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.records__list li {
+  margin-bottom: 4px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -699,4 +736,89 @@ body {
   font-family: "Cascadia Mono", "Consolas", monospace;
   font-size: 0.72rem;
   overflow-x: auto;
+}
+
+/* ── The summary library ────────────────────────────────────────────────────── */
+
+.library {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.saved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.saved:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.saved__title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 550;
+}
+
+.saved__meta {
+  margin: 3px 0 0;
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.saved__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.document {
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.document__h1 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.document__h2 {
+  margin: 20px 0 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.document__h3 {
+  margin: 16px 0 6px;
+  font-size: 0.82rem;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+
+.document__p {
+  margin: 0 0 10px;
+}
+
+.document__list {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.document__rule {
+  margin: 18px 0 12px;
+  border: none;
+  border-top: 1px solid var(--line);
 }

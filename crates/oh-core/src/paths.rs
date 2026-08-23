@@ -39,6 +39,15 @@ pub fn index_dir() -> Result<PathBuf> {
     Ok(data_dir()?.join("index"))
 }
 
+/// Summaries the user chose to keep, as Markdown.
+///
+/// Unlike everything else under this tree, the library is not derived and is never
+/// rebuilt. Deleting `summaries/` costs nothing; deleting this loses what somebody
+/// decided was worth keeping.
+pub fn library_dir() -> Result<PathBuf> {
+    Ok(data_dir()?.join("library"))
+}
+
 pub fn config_file() -> Result<PathBuf> {
     Ok(data_dir()?.join("config.json"))
 }
@@ -83,6 +92,7 @@ pub fn ensure_layout() -> Result<()> {
         episodes_dir()?,
         summaries_dir()?,
         index_dir()?,
+        library_dir()?,
     ] {
         ensure_dir(&dir)?;
     }

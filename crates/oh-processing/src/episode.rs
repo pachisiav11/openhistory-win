@@ -30,6 +30,20 @@ pub const ACTIVE_GAP: Duration = Duration::minutes(5);
 /// anyway, so this only has to catch a machine left running.
 pub const IDLE_SPLIT: Duration = Duration::minutes(15);
 
+/// The most documents one episode may name.
+///
+/// An episode is a stretch in one application. Eight documents in one stretch is
+/// already a person moving between files; forty is a file browser, and listing all of
+/// them would say nothing a summary could use.
+pub const MAX_DOCUMENTS: usize = 8;
+
+/// The most lines of interface text one episode may keep.
+///
+/// The collector already bounds each observation. This bounds the accumulation of
+/// them, which is the number that grows with the length of the episode rather than
+/// with the size of the window.
+pub const MAX_VISIBLE_TEXT: usize = 20;
+
 /// A continuous stretch of work in one application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +65,14 @@ pub struct Episode {
     /// Every distinct URL visited, in the order they first appeared.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub urls: Vec<String>,
+    /// Every distinct document worked on, by name rather than by location.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<String>,
+    /// Lines of interface text the windows were showing, already bounded and redacted
+    /// by the collector. Kept to make a summary specific about what was on screen; it
+    /// is not, and must not become, a copy of what was read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_text: Vec<String>,
     pub start: String,
     pub end: String,
     /// Elapsed time from the first event to the last, in milliseconds.
@@ -195,8 +217,12 @@ struct Builder {
     event_count: usize,
     titles: Vec<String>,
     urls: Vec<String>,
+    documents: Vec<String>,
+    visible_text: Vec<String>,
     seen_titles: BTreeSet<String>,
     seen_urls: BTreeSet<String>,
+    seen_documents: BTreeSet<String>,
+    seen_text: BTreeSet<String>,
     /// Accumulated time each title was on screen, so the episode can name the one the
     /// user actually spent the session in rather than the one they happened to open
     /// with.
@@ -226,8 +252,12 @@ impl Builder {
             event_count: 0,
             titles: Vec::new(),
             urls: Vec::new(),
+            documents: Vec::new(),
+            visible_text: Vec::new(),
             seen_titles: BTreeSet::new(),
             seen_urls: BTreeSet::new(),
+            seen_documents: BTreeSet::new(),
+            seen_text: BTreeSet::new(),
             title_time: Vec::new(),
             current_title: None,
         };
@@ -265,6 +295,26 @@ impl Builder {
         {
             self.urls.push(url.clone());
         }
+
+        // The label, never the path. The path names the machine's layout and stays in
+        // the event log, which is the one place it was already written down.
+        if let Some(document) = event.document.as_ref().and_then(|d| d.label())
+            && self.documents.len() < MAX_DOCUMENTS
+            && self.seen_documents.insert(document.clone())
+        {
+            self.documents.push(document);
+        }
+
+        if let Some(lines) = event.visible_text.as_ref() {
+            for line in lines {
+                if self.visible_text.len() == MAX_VISIBLE_TEXT {
+                    break;
+                }
+                if self.seen_text.insert(line.clone()) {
+                    self.visible_text.push(line.clone());
+                }
+            }
+        }
     }
 
     fn credit(&mut self, title: &str, millis: i64) {
@@ -299,6 +349,8 @@ impl Builder {
             title,
             titles: self.titles,
             urls: self.urls,
+            documents: self.documents,
+            visible_text: self.visible_text,
             start: stamp(self.start),
             end: stamp(end),
             duration_ms: (end - self.start).num_milliseconds(),
@@ -344,6 +396,92 @@ mod tests {
         ActivityEvent::at(EventKind::WindowChanged, at(minutes))
             .with_application(app(name))
             .with_window_title(title)
+    }
+
+    fn document(path: &str, title: Option<&str>) -> oh_core::DocumentObservation {
+        oh_core::DocumentObservation {
+            path: Some(path.to_owned()),
+            title: title.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn an_episode_collects_the_documents_it_was_on_by_name() {
+        let events = [
+            activation(0, "Microsoft Word", "Budget 2026 - Word").with_document(document(
+                r"C:\Users\someone\Documents\budget-2026.docx",
+                None,
+            )),
+            retitle(5, "Microsoft Word", "Budget 2026 - Word").with_document(document(
+                r"C:\Users\someone\Documents\budget-2026.docx",
+                None,
+            )),
+            retitle(10, "Microsoft Word", "Notes - Word")
+                .with_document(document(r"C:\Users\someone\Documents\notes.docx", None)),
+        ];
+
+        let episodes = detect_episodes(day(), &events);
+        assert_eq!(
+            episodes[0].documents,
+            vec!["budget-2026.docx", "notes.docx"]
+        );
+
+        let stored = serde_json::to_string(&episodes[0]).unwrap();
+        assert!(
+            !stored.contains("someone") && !stored.contains("Documents"),
+            "the document's location must not reach the episode: {stored}"
+        );
+    }
+
+    #[test]
+    fn an_episode_collects_what_the_window_showed_without_repeating_it() {
+        let events = [
+            activation(0, "Obsidian", "notes")
+                .with_visible_text(vec!["Outline".into(), "Preview".into()]),
+            retitle(5, "Obsidian", "notes")
+                .with_visible_text(vec!["Preview".into(), "Backlinks".into()]),
+        ];
+
+        let episodes = detect_episodes(day(), &events);
+        assert_eq!(
+            episodes[0].visible_text,
+            vec!["Outline", "Preview", "Backlinks"]
+        );
+    }
+
+    #[test]
+    fn what_an_episode_keeps_of_the_screen_is_bounded() {
+        let mut events = vec![activation(0, "Obsidian", "notes")];
+        for minute in 1..40 {
+            events.push(
+                retitle(minute, "Obsidian", "notes")
+                    .with_visible_text(vec![format!("Heading {minute}")]),
+            );
+        }
+
+        let episodes = detect_episodes(day(), &events);
+        assert_eq!(episodes[0].visible_text.len(), MAX_VISIBLE_TEXT);
+    }
+
+    #[test]
+    fn a_private_episode_records_no_document_and_no_screen_text() {
+        let boundary = ActivityEvent::at(EventKind::PrivacyBoundary, at(0))
+            .with_application(app("Google Chrome"))
+            .with_browser(BrowserObservation {
+                url: None,
+                is_private: true,
+            })
+            .with_document(document(r"C:\secret\plans.docx", Some("Plans")))
+            .with_visible_text(vec!["Something confidential".into()]);
+
+        let episodes = detect_episodes(day(), &[boundary]);
+        assert!(episodes[0].is_private);
+        assert!(episodes[0].documents.is_empty());
+        assert!(episodes[0].visible_text.is_empty());
+
+        let stored = serde_json::to_string(&episodes[0]).unwrap();
+        assert!(!stored.contains("Plans"), "{stored}");
+        assert!(!stored.contains("confidential"), "{stored}");
     }
 
     #[test]

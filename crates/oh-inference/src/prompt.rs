@@ -158,6 +158,18 @@ fn render_episode(episode: &PublicEpisode) -> String {
     if !episode.urls.is_empty() {
         line.push_str(&format!("    visited: {}\n", episode.urls.join(", ")));
     }
+    if !episode.documents.is_empty() {
+        line.push_str(&format!("    document: {}\n", episode.documents.join(", ")));
+    }
+    if !episode.visible_text.is_empty() {
+        // Labelled for what it is. A model told only "Preview, Outline, Retention
+        // policy" will write them into a sentence as though they were done; told they
+        // are what the window showed, it uses them to say what was being looked at.
+        line.push_str(&format!(
+            "    on screen: {}\n",
+            episode.visible_text.join(" · ")
+        ));
+    }
     line
 }
 
@@ -179,6 +191,8 @@ mod tests {
             title: title.map(str::to_owned),
             titles: Vec::new(),
             urls: Vec::new(),
+            documents: Vec::new(),
+            visible_text: Vec::new(),
             start: "2026-08-22T09:05:00.000Z".into(),
             end: "2026-08-22T09:35:00.000Z".into(),
             duration_ms: 1_800_000,
@@ -233,6 +247,21 @@ mod tests {
             !prompt.user.contains("something+private"),
             "{}",
             prompt.user
+        );
+    }
+
+    #[test]
+    fn the_document_and_what_the_window_showed_reach_the_prompt() {
+        let mut one = episode("Microsoft Word", Some("Document1 - Word"), 900_000);
+        one.documents = vec!["quarterly-review.docx".into()];
+        one.visible_text = vec!["Retention policy".into(), "Section 4".into()];
+        let prompt = hour_prompt(date(), &hour(900_000, &[&one.id]), &[&one]).unwrap();
+
+        assert!(prompt.user.contains("document: quarterly-review.docx"));
+        assert!(
+            prompt
+                .user
+                .contains("on screen: Retention policy · Section 4")
         );
     }
 

@@ -44,6 +44,16 @@ pub struct RecordingConfig {
     /// Record browser URLs at all. Turning this off still records which browser was
     /// in front, just not where the user went.
     pub capture_urls: bool,
+    /// Record the document or file the foreground window is on: the name of the
+    /// spreadsheet, not its contents.
+    pub capture_documents: bool,
+    /// Record a bounded amount of the text the window is displaying — tab labels,
+    /// headings, the name of the thing being edited.
+    ///
+    /// This is the widest of the three and the reason the others are separate: a
+    /// person can want to know which document they were in without wanting the words
+    /// on the screen written down.
+    pub capture_visible_text: bool,
 }
 
 impl Default for RecordingConfig {
@@ -51,6 +61,8 @@ impl Default for RecordingConfig {
         RecordingConfig {
             excluded_apps: DEFAULT_EXCLUDED.iter().map(|s| (*s).to_owned()).collect(),
             capture_urls: true,
+            capture_documents: true,
+            capture_visible_text: true,
         }
     }
 }
@@ -434,7 +446,7 @@ mod tests {
     fn exclusions_are_case_insensitive_and_deduplicated() {
         let mut config = RecordingConfig {
             excluded_apps: Vec::new(),
-            capture_urls: true,
+            ..RecordingConfig::default()
         };
         config.exclude("Slack");
         config.exclude("SLACK");

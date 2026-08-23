@@ -15,7 +15,9 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 
 use anyhow::{Context, Result, anyhow};
-use oh_core::{ActivityEvent, ApplicationDescriptor, BrowserObservation, EventKind};
+use oh_core::{
+    ActivityEvent, ApplicationDescriptor, BrowserObservation, DocumentObservation, EventKind,
+};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Power::{
@@ -104,6 +106,14 @@ fn class_is_shell_surface(class: &str) -> bool {
         .any(|known| known.eq_ignore_ascii_case(class))
 }
 
+/// How long to wait before reading a window's visible text again.
+///
+/// The read walks the accessibility tree, which costs real time, and a title change
+/// is not evidence that the interface changed — a video player retitles every second.
+/// Half a minute is short enough that switching between two documents records both
+/// and long enough that a chatty window costs nothing.
+const VISIBLE_TEXT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
 struct CollectorState {
     sink: EventSink,
     automation: Option<Automation>,
@@ -112,6 +122,9 @@ struct CollectorState {
     last_app_name: Option<String>,
     last_title: Option<String>,
     last_url: Option<String>,
+    /// When the visible text was last read, and for which window. A different window
+    /// is read at once; the same one waits for the interval.
+    last_text_read: Option<(isize, std::time::Instant)>,
 }
 
 impl CollectorState {
@@ -291,8 +304,15 @@ impl CollectorState {
         let mut event = self.base_event(kind, application);
         if sensitive {
             event = event.mark_sensitive();
-        } else if let Some(title) = title.clone() {
-            event = event.with_window_title(title);
+        } else {
+            if let Some(title) = title.clone() {
+                event = event.with_window_title(title);
+            }
+            let (document, lines) = self.read_window(hwnd);
+            if let Some(document) = document {
+                event = event.with_document(document);
+            }
+            event = event.with_visible_text(lines);
         }
         self.emit(event);
 
@@ -300,6 +320,39 @@ impl CollectorState {
         if !sensitive && let Some(browser) = browser {
             self.report_url(hwnd, application, browser);
         }
+    }
+
+    /// One bounded read of the window: the document it is on, and the text it shows.
+    ///
+    /// Both come from one walk of the accessibility tree, because the walk is what
+    /// costs time and this runs on the thread that pumps the hooks.
+    ///
+    /// A window that has just been read contributes no text rather than the previous
+    /// answer: repeating an observation would say it was seen twice, which is not what
+    /// happened. The document is read on every window change, since that is what
+    /// changed.
+    fn read_window(&mut self, hwnd: HWND) -> (Option<DocumentObservation>, Vec<String>) {
+        let Some(automation) = self.automation.as_ref() else {
+            return (None, Vec::new());
+        };
+
+        let window = hwnd.0 as isize;
+        let now = std::time::Instant::now();
+        let due = !self.last_text_read.is_some_and(|(last_window, last_read)| {
+            last_window == window && now.duration_since(last_read) < VISIBLE_TEXT_INTERVAL
+        });
+
+        let want_text = self.config.capture_visible_text && due;
+        let reading = automation.read_window(hwnd, self.config.capture_documents, want_text);
+        if want_text {
+            self.last_text_read = Some((window, now));
+        }
+
+        let document = reading.document.and_then(|(path, title)| {
+            let document = DocumentObservation { path, title };
+            (!document.is_empty()).then_some(document)
+        });
+        (document, reading.lines)
     }
 
     fn report_url(&mut self, hwnd: HWND, application: &ApplicationDescriptor, browser: Browser) {
@@ -550,6 +603,7 @@ fn collector_thread(
             last_app_name: None,
             last_title: None,
             last_url: None,
+            last_text_read: None,
         });
     });
 
@@ -715,6 +769,7 @@ mod tests {
             last_app_name: None,
             last_title: None,
             last_url: None,
+            last_text_read: None,
         }
     }
 

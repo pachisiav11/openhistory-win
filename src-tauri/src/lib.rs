@@ -5,6 +5,7 @@
 //! this module is the wiring between them and the window.
 
 pub mod collector_service;
+pub mod library;
 pub mod mcp;
 pub mod startup;
 pub mod summaries;
@@ -441,6 +442,11 @@ pub fn run() {
             mcp::regenerate_mcp_token,
             mcp::forget_mcp_tokens,
             mcp::mcp_client_config,
+            library::library_entries,
+            library::library_document,
+            library::library_save,
+            library::library_delete,
+            library::library_export,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenHistory");

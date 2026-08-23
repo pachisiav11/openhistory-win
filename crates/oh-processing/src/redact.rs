@@ -13,6 +13,9 @@
 //!   describe what someone was doing.
 //! - Executable paths never leave. They name the machine's layout, and the display
 //!   name already says which application it was.
+//! - A document leaves by its name and never by its location, for the same reason.
+//! - Interface text leaves as the collector redacted and bounded it, cut again to a
+//!   handful of lines. It is what made the window recognisable, not what was in it.
 
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +27,16 @@ pub const MAX_URLS: usize = 8;
 
 /// The most alternative titles to carry on one episode.
 pub const MAX_TITLES: usize = 5;
+
+/// The most documents to carry on one episode.
+pub const MAX_DOCUMENTS: usize = 5;
+
+/// The most lines of interface text to carry on one episode.
+///
+/// Smaller than what the episode keeps. A model writing two sentences about an hour
+/// needs enough to recognise the window, not a transcript of it, and every line sent
+/// is a line the person did not separately agree to.
+pub const MAX_VISIBLE_TEXT: usize = 8;
 
 /// An episode reduced to what may be shown outside the application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +51,12 @@ pub struct PublicEpisode {
     pub titles: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub urls: Vec<String>,
+    /// Documents worked on, by name. Never by location.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<String>,
+    /// A few lines of what the window was showing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_text: Vec<String>,
     pub start: String,
     pub end: String,
     pub active_ms: i64,
@@ -68,6 +87,8 @@ impl From<&Episode> for PublicEpisode {
                 title: None,
                 titles: Vec::new(),
                 urls: Vec::new(),
+                documents: Vec::new(),
+                visible_text: Vec::new(),
                 start: episode.start.clone(),
                 end: episode.end.clone(),
                 active_ms: episode.active_ms,
@@ -104,6 +125,22 @@ impl From<&Episode> for PublicEpisode {
             title: episode.title.clone(),
             titles,
             urls,
+            // Already labels rather than paths by the time an episode holds them, and
+            // already redacted and bounded by the collector. Both are cut again here,
+            // because what an episode keeps for its own use is more than what is
+            // worth handing to somebody else.
+            documents: episode
+                .documents
+                .iter()
+                .take(MAX_DOCUMENTS)
+                .cloned()
+                .collect(),
+            visible_text: episode
+                .visible_text
+                .iter()
+                .take(MAX_VISIBLE_TEXT)
+                .cloned()
+                .collect(),
             start: episode.start.clone(),
             end: episode.end.clone(),
             active_ms: episode.active_ms,
@@ -150,6 +187,8 @@ mod tests {
                 "https://learn.microsoft.com/windows/win32/winauto/?search=uia&token=secret".into(),
                 "https://learn.microsoft.com/windows/win32/winauto/#overview".into(),
             ],
+            documents: Vec::new(),
+            visible_text: Vec::new(),
             start: "2026-08-22T09:00:00.000Z".into(),
             end: "2026-08-22T09:30:00.000Z".into(),
             duration_ms: 1_800_000,
@@ -233,6 +272,31 @@ mod tests {
             "a title leaked: {rendered}"
         );
         assert!(!rendered.contains("microsoft"), "a URL leaked: {rendered}");
+    }
+
+    #[test]
+    fn documents_and_screen_text_are_carried_and_capped() {
+        let mut source = episode();
+        source.documents = (0..20).map(|n| format!("chapter-{n}.md")).collect();
+        source.visible_text = (0..20).map(|n| format!("Heading {n}")).collect();
+
+        let public = PublicEpisode::from(&source);
+        assert_eq!(public.documents.len(), MAX_DOCUMENTS);
+        assert_eq!(public.documents[0], "chapter-0.md");
+        assert_eq!(public.visible_text.len(), MAX_VISIBLE_TEXT);
+        assert_eq!(public.visible_text[0], "Heading 0");
+    }
+
+    #[test]
+    fn a_private_episode_carries_no_document_and_no_screen_text() {
+        let mut source = episode();
+        source.is_private = true;
+        source.documents = vec!["severance-agreement.docx".into()];
+        source.visible_text = vec!["Confidential".into()];
+
+        let rendered = serde_json::to_string(&PublicEpisode::from(&source)).unwrap();
+        assert!(!rendered.contains("severance"), "{rendered}");
+        assert!(!rendered.contains("Confidential"), "{rendered}");
     }
 
     #[test]

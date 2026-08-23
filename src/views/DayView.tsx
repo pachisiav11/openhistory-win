@@ -19,7 +19,7 @@ import {
   type DaySummary,
   type Readiness,
 } from "../lib/ipc";
-import { duration } from "../lib/format";
+import { duration, shiftDate } from "../lib/format";
 
 interface Props {
   date: string;
@@ -29,21 +29,22 @@ interface Props {
   focusHour?: number | null;
   /** Called once the hour has been reached, so the same request can be made again. */
   onFocused?: () => void;
-}
-
-/** A date `days` away from the given one, in the same YYYY-MM-DD form. */
-function shift(date: string, days: number): string {
-  const [year, month, day] = date.split("-").map(Number);
-  const moved = new Date(year ?? 1970, (month ?? 1) - 1, (day ?? 1) + days);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${moved.getFullYear()}-${pad(moved.getMonth() + 1)}-${pad(moved.getDate())}`;
+  /** Open the Summary view on this day. Absent when there is nowhere to open it. */
+  onOpenSummary?: () => void;
 }
 
 function hourLabel(hour: number): string {
   return `${String(hour).padStart(2, "0")}:00`;
 }
 
-export default function DayView({ date, onChangeDate, revision, focusHour, onFocused }: Props) {
+export default function DayView({
+  date,
+  onChangeDate,
+  revision,
+  focusHour,
+  onFocused,
+  onOpenSummary,
+}: Props) {
   const [report, setReport] = useState<DayReport | null>(null);
   const [summary, setSummary] = useState<DaySummary | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
@@ -123,12 +124,19 @@ export default function DayView({ date, onChangeDate, revision, focusHour, onFoc
   return (
     <section aria-label="Day view">
       <div className="section__head">
-        <h2 className="section__title">{date === today ? `Today · ${date}` : date}</h2>
+        <div className="section__lead">
+          <h2 className="section__title">{date === today ? `Today · ${date}` : date}</h2>
+          {onOpenSummary ? (
+            <button type="button" className="button button--quiet" onClick={onOpenSummary}>
+              Summary page
+            </button>
+          ) : null}
+        </div>
         <div className="daynav">
           <button
             type="button"
             className="button button--quiet"
-            onClick={() => onChangeDate(shift(date, -1))}
+            onClick={() => onChangeDate(shiftDate(date, -1))}
           >
             ‹ Previous
           </button>
@@ -143,7 +151,7 @@ export default function DayView({ date, onChangeDate, revision, focusHour, onFoc
           <button
             type="button"
             className="button button--quiet"
-            onClick={() => onChangeDate(shift(date, 1))}
+            onClick={() => onChangeDate(shiftDate(date, 1))}
             disabled={date >= today}
           >
             Next ›

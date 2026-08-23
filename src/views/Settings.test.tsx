@@ -297,6 +297,36 @@ describe("Settings — recording and data", () => {
     expect(saved[0]!.recording.excludedApps).toEqual(["1password", "keepassxc"]);
   });
 
+  it("states what is recorded and what never is, before any switch", async () => {
+    backend();
+    render(<Settings onChanged={() => {}} />);
+
+    expect(await screen.findByText("What it records")).toBeInTheDocument();
+    expect(screen.getByText("What it never records")).toBeInTheDocument();
+    expect(screen.getByText(/Key presses, clicks, or where the pointer went/)).toBeInTheDocument();
+    expect(screen.getByText(/Screenshots, the screen itself/)).toBeInTheDocument();
+  });
+
+  it("turns the document and on-screen text off one at a time", async () => {
+    backend();
+    const saved: Config[] = [];
+    mockCommand("set_config", (args) => {
+      saved.push(args?.config as Config);
+      return args?.config as Config;
+    });
+    render(<Settings onChanged={() => {}} />);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("checkbox", { name: /Record the document/ }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]!.recording.captureDocuments).toBe(false);
+    expect(saved[0]!.recording.captureVisibleText).toBe(true);
+
+    await user.click(screen.getByRole("checkbox", { name: /Record a little of the text/ }));
+    await waitFor(() => expect(saved).toHaveLength(2));
+    expect(saved[1]!.recording.captureVisibleText).toBe(false);
+  });
+
   it("keeps an earlier change when a second is made before the first lands", async () => {
     backend();
     const saved: Config[] = [];

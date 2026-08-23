@@ -249,6 +249,14 @@ fn terms_of(episode: &Episode) -> BTreeSet<String> {
     for url in &episode.urls {
         terms.extend(tokenize_url(url));
     }
+    // The point of recording the document and what the window showed is being able to
+    // find the afternoon by what was on the screen, not only by which program was.
+    for document in &episode.documents {
+        terms.extend(tokenize(document));
+    }
+    for line in &episode.visible_text {
+        terms.extend(tokenize(line));
+    }
     terms
 }
 
@@ -289,6 +297,8 @@ mod tests {
             title: Some(title.to_owned()),
             titles: vec![title.to_owned()],
             urls: Vec::new(),
+            documents: Vec::new(),
+            visible_text: Vec::new(),
             start: start.to_owned(),
             end: start.to_owned(),
             duration_ms: 0,
@@ -330,6 +340,35 @@ mod tests {
         let hits = sample().search("accessibility", 10);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].episode.id, "b");
+    }
+
+    #[test]
+    fn finds_an_episode_by_the_document_it_was_on() {
+        let mut worked = episode(
+            "d",
+            "Microsoft Word",
+            "Document1 - Word",
+            "2026-08-21T11:00:00Z",
+        );
+        worked.documents = vec!["quarterly-review.docx".into()];
+
+        let mut index = SearchIndex::new();
+        index.index_day("2026-08-21", &[worked]);
+
+        // The window title said nothing useful. The document did.
+        assert_eq!(index.search("quarterly", 10).len(), 1);
+        assert_eq!(index.search("review docx", 10).len(), 1);
+    }
+
+    #[test]
+    fn finds_an_episode_by_what_the_window_was_showing() {
+        let mut read = episode("e", "Obsidian", "Obsidian", "2026-08-21T12:00:00Z");
+        read.visible_text = vec!["Retention policy".into(), "Outline".into()];
+
+        let mut index = SearchIndex::new();
+        index.index_day("2026-08-21", &[read]);
+
+        assert_eq!(index.search("retention", 10).len(), 1);
     }
 
     #[test]

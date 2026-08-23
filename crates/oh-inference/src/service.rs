@@ -461,6 +461,8 @@ mod tests {
             title: Some(format!("{app} window")),
             titles: Vec::new(),
             urls: Vec::new(),
+            documents: Vec::new(),
+            visible_text: Vec::new(),
             start: format!("2026-08-22T{hour:02}:05:00.000Z"),
             end: format!("2026-08-22T{hour:02}:35:00.000Z"),
             duration_ms: 1_800_000,

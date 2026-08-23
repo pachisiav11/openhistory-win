@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod event;
+pub mod library;
 pub mod paths;
 pub mod store;
 pub mod summary;
@@ -20,5 +21,6 @@ pub use event::{
     ActivityEvent, ApplicationDescriptor, BrowserObservation, DocumentObservation, EventKind,
     SCHEMA_VERSION, SemanticElement, TextChange,
 };
+pub use library::{LibraryEntry, LibraryStore};
 pub use store::{DayStats, EventStore, local_date_of, read_day, today};
 pub use summary::{DaySummary, HourSummary, SummaryStore};

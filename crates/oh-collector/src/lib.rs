@@ -24,6 +24,7 @@
 pub mod browser;
 pub mod collector;
 pub mod config;
+pub mod text;
 pub mod uia;
 pub mod win;
 

@@ -660,3 +660,91 @@ view, so it outlives the request and survives the day being reprocessed undernea
 **Consequence.** The mark is cleared by changing the date and by nothing else. It stays
 while the day refreshes and while a summary is written, which is what someone who came
 from a search wants: the hour they asked about stays findable.
+
+## AD-24: The visible text is bounded and redacted where it is written, not where it is read
+
+**Decision.** The collector reads two more things from the accessibility tree: the
+document a window is on, and a bounded sample of the text that window is displaying. The
+sample is capped four ways — at most 80 elements, 4 levels deep, 12 lines of 120
+characters, and 1,000 characters in total — read at most once every thirty seconds per
+window. Every line passes `oh-collector::text` before it reaches the log: password and
+offscreen elements are never visited, runs of twelve or more digits are masked, and a
+long unbroken word that looks like a key, a token or a PEM header is dropped whole.
+
+**Why.** This is the capability the original macOS OpenHistory has and the port did not,
+and it is the difference between a summary that says "Visual Studio Code for forty
+minutes" and one that says what was being worked on. The frozen event schema already
+reserved `document` and `visibleText`, so nothing about the contract had to move.
+
+The caps are on the collector thread for a reason. Every step of a UIAutomation walk is a
+cross-process call into the application being read; an unbounded walk of a large document
+view can take longer than the interval between window switches, and the collector would
+then be measuring its own latency. Bounding the walk by breadth *and* depth means a
+pathological tree costs a known amount rather than a proportional one.
+
+Redaction happens at write time rather than at read time because the alternative is a log
+that contains a secret and a promise that nobody will look. AD-14 already keeps a
+separate type for what may leave the machine, but that boundary protects the network, not
+the disk. Somebody with a text editor and the data folder is a case the redaction pass has
+to hold on its own.
+
+**Consequence.** The pass is deliberately eager: a genuine word of prose that happens to
+be twenty characters of mixed letters and digits is dropped along with the tokens. That
+trade is written into the tests, because the failure it prevents — an API key sitting in
+a plain-text log forever — is not symmetrical with the failure it causes, which is one
+missing line of context in one hour's summary.
+
+Both categories are switches in Settings, defaulting on. Turning one off stops it being
+read at all rather than filtering it afterwards, so there is no state in which the
+collector holds something the settings say it should not have.
+
+## AD-25: A saved day is a document, and the only thing the application will not delete
+
+**Decision.** The Summary view composes a day — its written summary, where the time went,
+and each hour that was written — into one Markdown document and keeps it under
+`library/`, listed and read in the application, exported anywhere through a Save-as
+dialog, and removed only by a confirmed click.
+
+**Why.** AD-12 makes everything after the event log derived and disposable, and the
+retention window eventually takes the events too. That is the right default for a
+recorder and the wrong one for the day somebody actually wants to keep. The library is
+the seam between the two: below it, everything is rebuildable and expendable; above it,
+one file that no amount of reprocessing, forgetting or expiry will touch.
+
+Markdown, not JSON, and composed rather than dumped. A saved day is for reading later,
+possibly by a person who no longer has the application, so it carries the summary beside
+the measurements that make it mean something and names the model that wrote it. Front
+matter carries the title, the date and the time it was saved, which is enough for the
+list without opening a file.
+
+Composition lives in the Tauri layer rather than in `oh-core` because it needs both the
+day's report and the day's summary, and the store deliberately knows about neither: it
+stores a title, a date and a body. That keeps the store testable without a processor and
+lets the document's shape change without touching what is already on disk.
+
+**Consequence.** The application ships a second Markdown parser, `src/lib/markdown.ts`,
+covering exactly the grammar `compose` emits. A full library would be a dependency
+carried to read a file the application wrote itself, and the reason for storing Markdown
+in the first place is that the file is legible without one.
+
+## AD-26: The recording statement lives in the panel that does the recording
+
+**Decision.** The list of what is recorded and what never is appears at the top of the
+Recording panel in Settings, above the switches it describes, and again in the README. It
+is written from the code, not from the intent.
+
+**Why.** A privacy policy in a document nobody opens is a claim; the same words directly
+above the switches that implement them are a contract the reader can check on the spot.
+Placing it above the switches also orders the panel correctly: what the application does,
+then what you may turn off.
+
+Writing it last was deliberate. The statement was composed after the capture, the
+redaction and the switches were finished, so each line names something that exists —
+including the ones that had to be worded around a limitation, like idle time being
+inferred from gaps rather than measured from input, because nothing in this application
+watches the keyboard or the pointer at all.
+
+**Consequence.** The statement and the code have to move together, and the tests hold two
+of its lines so the panel cannot quietly lose it. The cloud-agreement text is now the
+third place that has to agree, since document names and lines of on-screen text now reach
+a provider when a cloud model is chosen.

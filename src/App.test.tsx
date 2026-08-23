@@ -10,6 +10,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function yesterday(): string {
+  const when = new Date();
+  when.setDate(when.getDate() - 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`;
+}
+
 describe("App shell", () => {
   it("shows the app version once IPC resolves", async () => {
     backend();
@@ -82,6 +89,24 @@ describe("App shell", () => {
     await waitFor(() =>
       expect(screen.getByText("10:00").closest("li")).toHaveAttribute("aria-current", "location"),
     );
+  });
+
+  it("opens the summary page on the day already being read", async () => {
+    backend();
+    render(<App />);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Day" }));
+    await user.click(await screen.findByRole("button", { name: /Previous/ }));
+    await user.click(screen.getByRole("button", { name: "Summary page" }));
+
+    const view = await screen.findByRole("region", { name: "Summary view" });
+    expect(view).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Summary" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByText(yesterday())).toBeInTheDocument();
   });
 });
 

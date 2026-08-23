@@ -9,6 +9,9 @@
 //! applications that refuse automation all fail these calls, and the correct
 //! response is to record less rather than to stop collecting.
 
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -17,12 +20,13 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationValuePattern,
-    TreeScope_Children, TreeScope_Descendants, UIA_ControlTypePropertyId, UIA_EditControlTypeId,
-    UIA_ValuePatternId,
+    TreeScope_Children, TreeScope_Descendants, UIA_ControlTypePropertyId,
+    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_ValuePatternId,
 };
 use windows::core::Interface;
 
 use crate::browser::Browser;
+use crate::text;
 
 /// How many `Edit` elements to inspect before giving up on finding the address bar.
 ///
@@ -34,6 +38,29 @@ const MAX_EDIT_CANDIDATES: i32 = 12;
 /// How many direct children of a window to read names from when checking for a
 /// private-browsing marker. A browser window has a handful.
 const MAX_WINDOW_CHILDREN: i32 = 8;
+
+/// How many elements a visible-text read may look at.
+///
+/// Every step is a cross-process call, so this is a time budget as much as a size
+/// one. Eighty elements over four levels reaches the tab strip, the headings and the
+/// name of the thing being edited, which is what makes a summary specific; going
+/// deeper reaches the body of the document, which is not this application's business
+/// and would cost noticeable time on every window change.
+const MAX_TEXT_ELEMENTS: usize = 80;
+
+/// How far down the tree a visible-text read may go.
+const MAX_TEXT_DEPTH: u32 = 4;
+
+/// How many children of any one element a visible-text read may queue.
+const MAX_TEXT_CHILDREN: i32 = 24;
+
+/// How long one window may be read for, whatever the element budget allows.
+///
+/// The collector thread pumps the WinEvent hooks, so time spent inside a cross-process
+/// automation call is time the next window change waits. Eighty elements is a small
+/// number until one of them belongs to a Chromium tree that answers slowly; the clock
+/// is what makes the cost predictable rather than merely bounded.
+const READ_BUDGET: Duration = Duration::from_millis(120);
 
 /// Marks a thread as COM-initialized for as long as it is held.
 pub struct ComApartment {
@@ -60,6 +87,16 @@ impl Drop for ComApartment {
             unsafe { CoUninitialize() };
         }
     }
+}
+
+/// What one bounded read of a window found.
+#[derive(Debug, Default)]
+pub struct WindowReading {
+    /// The document the window is on, as its location and its name. Both parts are
+    /// optional: an editor may publish one without the other.
+    pub document: Option<(Option<String>, Option<String>)>,
+    /// Redacted lines of the text the window is displaying.
+    pub lines: Vec<String>,
 }
 
 /// Handle to the UIAutomation service.
@@ -121,6 +158,96 @@ impl Automation {
         None
     }
 
+    /// One bounded read of a window's accessibility tree.
+    ///
+    /// The document a window is on and the text it is displaying are found in the same
+    /// walk because the walk is the expensive part. Both are budgeted four ways — by
+    /// elements visited, by depth, by children queued per element, and by a wall clock —
+    /// and the walk stops as soon as it has what was asked of it.
+    ///
+    /// An earlier version asked UIAutomation for every `Document` descendant of the
+    /// window in one call. That is a whole-tree search inside the other process, it
+    /// answers in seconds on a large Chromium window, and none of the caps applied until
+    /// after it returned. Nothing about the caller changed; the cost did.
+    ///
+    /// Password fields and offscreen elements are never read — the first because it is a
+    /// credential, the second because a hidden menu is not something the user was
+    /// looking at.
+    pub fn read_window(&self, hwnd: HWND, want_document: bool, want_text: bool) -> WindowReading {
+        let mut reading = WindowReading::default();
+        if !want_document && !want_text {
+            return reading;
+        }
+
+        let Ok(root) = (unsafe { self.inner.ElementFromHandle(hwnd) }) else {
+            return reading;
+        };
+        let Ok(condition) = (unsafe { self.inner.CreateTrueCondition() }) else {
+            return reading;
+        };
+
+        let deadline = Instant::now() + READ_BUDGET;
+        let mut raw: Vec<String> = Vec::new();
+        let mut queue: VecDeque<(IUIAutomationElement, u32)> = VecDeque::from([(root, 0u32)]);
+        let mut visited = 0usize;
+
+        while let Some((element, depth)) = queue.pop_front() {
+            let text_done = !want_text || raw.len() >= text::MAX_LINES * 4;
+            let document_done = !want_document || reading.document.is_some();
+            if (text_done && document_done) || visited >= MAX_TEXT_ELEMENTS {
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            visited += 1;
+
+            if element_is_password(&element) || element_is_offscreen(&element) {
+                continue;
+            }
+
+            let name = unsafe { element.CurrentName() }
+                .ok()
+                .map(|name| name.to_string());
+
+            if !document_done && element_is_document(&element) {
+                let title = name.as_deref().and_then(text::redact_line);
+                // The value of a document element is where it came from. It is only
+                // worth recording when it names a location rather than repeating the
+                // contents.
+                let path = element_value(&element).and_then(|value| document_path(&value));
+                if title.is_some() || path.is_some() {
+                    reading.document = Some((path, title));
+                }
+            }
+
+            if want_text
+                && let Some(name) = name
+                && !name.trim().is_empty()
+            {
+                raw.push(name);
+            }
+
+            if depth >= MAX_TEXT_DEPTH {
+                continue;
+            }
+            let Ok(children) = (unsafe { element.FindAll(TreeScope_Children, &condition) }) else {
+                continue;
+            };
+            let count = unsafe { children.Length() }
+                .unwrap_or(0)
+                .min(MAX_TEXT_CHILDREN);
+            for i in 0..count {
+                if let Ok(child) = unsafe { children.GetElement(i) } {
+                    queue.push_back((child, depth + 1));
+                }
+            }
+        }
+
+        reading.lines = text::redact_lines(raw);
+        reading
+    }
+
     /// True when keyboard focus is inside a password field anywhere on the desktop.
     pub fn focus_is_password_field(&self) -> bool {
         unsafe { self.inner.GetFocusedElement() }
@@ -176,8 +303,43 @@ impl Automation {
     }
 }
 
+fn element_is_document(element: &IUIAutomationElement) -> bool {
+    unsafe { element.CurrentControlType() }.is_ok_and(|kind| kind == UIA_DocumentControlTypeId)
+}
+
 fn element_is_password(element: &IUIAutomationElement) -> bool {
     unsafe { element.CurrentIsPassword() }.is_ok_and(|flag| flag.as_bool())
+}
+
+fn element_is_offscreen(element: &IUIAutomationElement) -> bool {
+    unsafe { element.CurrentIsOffscreen() }.is_ok_and(|flag| flag.as_bool())
+}
+
+/// Whether a document element's value names a location worth recording.
+///
+/// An editor puts the file's path here; a text control puts its contents here. The
+/// two are told apart by shape: a location is one line, has no spaces around a
+/// separator, and either looks like a Windows path or like an address. Anything else
+/// is the document itself and must not be copied into the log.
+pub fn document_path(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains(['\n', '\r', '\t']) {
+        return None;
+    }
+    if trimmed.chars().count() > text::MAX_LINE_CHARS {
+        return None;
+    }
+
+    let windows_path = trimmed.len() > 3
+        && trimmed.as_bytes()[1] == b':'
+        && matches!(trimmed.as_bytes()[2], b'\\' | b'/')
+        && trimmed.as_bytes()[0].is_ascii_alphabetic();
+    let unc_path = trimmed.starts_with(r"\\");
+
+    if windows_path || unc_path {
+        return Some(trimmed.to_owned());
+    }
+    normalize_url(trimmed)
 }
 
 fn element_value(element: &IUIAutomationElement) -> Option<String> {
@@ -258,6 +420,28 @@ mod tests {
         assert_eq!(normalize_url("   "), None);
         assert_eq!(normalize_url(".com"), None);
         assert_eq!(normalize_url("trailing."), None);
+    }
+
+    #[test]
+    fn a_document_value_that_names_a_location_is_kept() {
+        for path in [
+            r"C:\Users\someone\Documents\budget-2026.xlsx",
+            r"D:/work/notes.md",
+            r"\\server\share\report.docx",
+            "https://docs.example.com/spec/overview",
+        ] {
+            assert_eq!(document_path(path).as_deref(), Some(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_document_value_that_is_the_document_itself_is_refused() {
+        // A text control reports its contents through the same property an editor
+        // reports its path through. Copying that into the log is copying the file.
+        assert_eq!(document_path("The quick brown fox jumped over"), None);
+        assert_eq!(document_path("first line\nsecond line"), None);
+        assert_eq!(document_path(&"a".repeat(400)), None);
+        assert_eq!(document_path("   "), None);
     }
 
     #[test]

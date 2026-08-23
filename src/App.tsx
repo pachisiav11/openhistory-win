@@ -4,6 +4,7 @@ import { clockTime } from "./lib/format";
 import Timeline from "./views/Timeline";
 import Search from "./views/Search";
 import DayView from "./views/DayView";
+import Summary from "./views/Summary";
 import Settings from "./views/Settings";
 
 /** How long to wait after the last recorded event before reprocessing the day. */
@@ -13,6 +14,7 @@ const VIEWS = [
   { id: "timeline", label: "Timeline" },
   { id: "search", label: "Search" },
   { id: "day", label: "Day" },
+  { id: "summary", label: "Summary" },
   { id: "settings", label: "Settings" },
 ] as const;
 
@@ -80,6 +82,8 @@ export default function App() {
   }, []);
 
   const clearFocus = useCallback(() => setFocusHour(null), []);
+
+  const openSummary = useCallback(() => setView("summary"), []);
 
   const running = status?.running ?? false;
 
@@ -149,7 +153,11 @@ export default function App() {
             revision={revision}
             focusHour={focusHour}
             onFocused={clearFocus}
+            onOpenSummary={openSummary}
           />
+        ) : null}
+        {view === "summary" ? (
+          <Summary date={day} onChangeDate={setDay} revision={revision} />
         ) : null}
         {view === "settings" ? <Settings onChanged={() => setRevision((n) => n + 1)} /> : null}
       </main>
