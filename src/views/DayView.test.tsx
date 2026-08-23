@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DayView from "./DayView";
 import { clearMocks, localDate, mockCommand, type RunReport } from "../lib/ipc";
@@ -157,6 +157,78 @@ describe("Day view", () => {
 
     expect(await screen.findByRole("button", { name: "Next ›" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Today" })).toBeDisabled();
+  });
+
+  it("marks the hour a search result was opened at, and says it has arrived", async () => {
+    backend();
+    mockCommand("day_report", () => report([episode()], hours()));
+    let told = 0;
+    // Stable, as the shell's is: a fresh callback each render would ask the effect to
+    // run again on every unrelated render.
+    const arrived = () => {
+      told += 1;
+    };
+    render(
+      <DayView
+        date="2026-08-21"
+        onChangeDate={() => {}}
+        revision={0}
+        focusHour={10}
+        onFocused={arrived}
+      />,
+    );
+
+    // The mark is applied once the day has loaded, a commit after the hours appear.
+    await waitFor(() =>
+      expect(screen.getByText("10:00").closest("li")).toHaveAttribute("aria-current", "location"),
+    );
+    expect(screen.getByText("09:00").closest("li")).not.toHaveAttribute("aria-current");
+    expect(told).toBe(1);
+  });
+
+  it("marks no hour when the day was opened without one", async () => {
+    backend();
+    mockCommand("day_report", () => report([episode()], hours()));
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} focusHour={null} />);
+
+    expect((await screen.findByText("09:00")).closest("li")).not.toHaveAttribute("aria-current");
+    expect(screen.getByText("10:00").closest("li")).not.toHaveAttribute("aria-current");
+  });
+
+  it("counts idle time as screen time without crediting it to an application", async () => {
+    backend();
+    mockCommand("day_report", () =>
+      report(
+        [
+          episode({
+            id: "a",
+            app: "Visual Studio Code",
+            durationMs: 60 * MINUTE,
+            activeMs: 45 * MINUTE,
+          }),
+        ],
+        hours(),
+      ),
+    );
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    expect(await screen.findByText(/1h at the machine · 45m of it working/)).toBeInTheDocument();
+
+    const idle = screen.getByText("Idle").closest("li");
+    expect(idle).toHaveTextContent("15m");
+    // The editor keeps its 45 minutes: the idle quarter of an hour is nobody's.
+    expect(screen.getByText("Visual Studio Code").closest("li")).toHaveTextContent("45m");
+  });
+
+  it("shows no idle row for a day with evidence for all of it", async () => {
+    backend();
+    mockCommand("day_report", () =>
+      report([episode({ durationMs: 30 * MINUTE, activeMs: 30 * MINUTE })], hours()),
+    );
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    expect(await screen.findByText(/30m at the machine · 30m of it working/)).toBeInTheDocument();
+    expect(screen.queryByText("Idle")).not.toBeInTheDocument();
   });
 
   it("explains a day with nothing on it", async () => {

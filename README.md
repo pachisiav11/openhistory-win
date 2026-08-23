@@ -101,6 +101,17 @@ one application; each one records the time it spanned and, separately, the time 
 evidence for — a window left in the foreground overnight is not eight hours of work.
 Delete `episodes/` and `index/` and they are rebuilt from the event log.
 
+## Reading a day
+
+The Day view ranks the day's applications by time spent and gives the day two figures:
+the time at the machine, and how much of that was working time. The difference between
+them is idle — a window in front with nothing happening — and it is listed as its own
+row rather than credited to whatever application happened to be open. Time while the
+screen was locked or asleep is in neither figure; being away is not being idle.
+
+A search result opens the day it came from at the hour it happened in, with that hour
+marked, so a match found in a fortnight of history is one click from its context.
+
 Closing the window leaves the app recording in the tray. Quit from the tray menu to
 stop it entirely.
 

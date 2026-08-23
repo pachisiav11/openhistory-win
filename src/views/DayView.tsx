@@ -6,7 +6,7 @@
  * than hidden. A person who has not set up a model should be able to see that the
  * feature exists and what it needs, not wonder where it went.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   dayReport,
   daySummary,
@@ -25,6 +25,10 @@ interface Props {
   date: string;
   onChangeDate: (date: string) => void;
   revision: number;
+  /** An hour to scroll to and mark, set when the day was opened from a search result. */
+  focusHour?: number | null;
+  /** Called once the hour has been reached, so the same request can be made again. */
+  onFocused?: () => void;
 }
 
 /** A date `days` away from the given one, in the same YYYY-MM-DD form. */
@@ -39,7 +43,7 @@ function hourLabel(hour: number): string {
   return `${String(hour).padStart(2, "0")}:00`;
 }
 
-export default function DayView({ date, onChangeDate, revision }: Props) {
+export default function DayView({ date, onChangeDate, revision, focusHour, onFocused }: Props) {
   const [report, setReport] = useState<DayReport | null>(null);
   const [summary, setSummary] = useState<DaySummary | null>(null);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
@@ -58,6 +62,20 @@ export default function DayView({ date, onChangeDate, revision }: Props) {
   useEffect(() => {
     inferenceReadiness().then(setReadiness).catch(setError);
   }, [revision]);
+
+  // Marking an hour outlives the request that asked for it, so the mark is state here
+  // rather than the prop itself. Declared before the effect that sets it, so opening
+  // another day and an hour of it in the same click leaves the hour marked.
+  const [marked, setMarked] = useState<number | null>(null);
+  useEffect(() => setMarked(null), [date]);
+
+  const hourNodes = useRef(new Map<number, HTMLLIElement>());
+  useEffect(() => {
+    if (focusHour === null || focusHour === undefined || report === null) return;
+    setMarked(focusHour);
+    hourNodes.current.get(focusHour)?.scrollIntoView({ block: "center" });
+    onFocused?.();
+  }, [focusHour, report, onFocused]);
 
   const run = useCallback(
     async (label: string, work: () => Promise<unknown>) => {
@@ -95,6 +113,12 @@ export default function DayView({ date, onChangeDate, revision }: Props) {
   // Writing without forcing only fills the hours that have none, so once a day has
   // any summary the same button means something different from a rewrite.
   const anything = Boolean(summary && (summary.daily || summary.hours.length > 0));
+
+  // The bars are shares of screen time, not of worked time, so the idle row is
+  // measured against the same whole as the applications beside it.
+  const idleMs = report?.rollup.idleMs ?? 0;
+  const screenMs = (report?.rollup.activeMs ?? 0) + idleMs;
+  const share = (ms: number) => (screenMs > 0 ? Math.round((ms / screenMs) * 100) : 0);
 
   return (
     <section aria-label="Day view">
@@ -192,7 +216,15 @@ export default function DayView({ date, onChangeDate, revision }: Props) {
             {hours.map((hour) => {
               const said = written.get(hour.hour);
               return (
-                <li key={hour.hour} className="hourbar">
+                <li
+                  key={hour.hour}
+                  className={`hourbar${marked === hour.hour ? " hourbar--marked" : ""}`}
+                  aria-current={marked === hour.hour ? "location" : undefined}
+                  ref={(node) => {
+                    if (node) hourNodes.current.set(hour.hour, node);
+                    else hourNodes.current.delete(hour.hour);
+                  }}
+                >
                   <span className="hourbar__label">{hourLabel(hour.hour)}</span>
                   <span className="hourbar__track">
                     <span
@@ -227,28 +259,42 @@ export default function DayView({ date, onChangeDate, revision }: Props) {
       </section>
 
       <section className="panel" aria-label="Applications">
-        <h3 className="panel__title">Where the time went</h3>
+        <div className="panel__head">
+          <h3 className="panel__title">Where the time went</h3>
+          {screenMs > 0 ? (
+            <p className="panel__total">
+              {duration(screenMs)} at the machine · {duration(report?.rollup.activeMs ?? 0)} of it
+              working
+            </p>
+          ) : null}
+        </div>
         {report && report.rollup.apps.length > 0 ? (
-          <ol className="apps">
-            {report.rollup.apps.map((app) => (
-              <li key={app.app} className="app">
-                <span className="app__name">{app.app}</span>
-                <span className="app__bar">
-                  <span
-                    className="app__fill"
-                    style={{
-                      width: `${
-                        report.rollup.activeMs > 0
-                          ? Math.round((app.activeMs / report.rollup.activeMs) * 100)
-                          : 0
-                      }%`,
-                    }}
-                  />
-                </span>
-                <span className="app__active">{duration(app.activeMs)}</span>
-              </li>
-            ))}
-          </ol>
+          <>
+            <ol className="apps">
+              {report.rollup.apps.map((app) => (
+                <li key={app.app} className="app">
+                  <span className="app__name">{app.app}</span>
+                  <span className="app__bar">
+                    <span className="app__fill" style={{ width: `${share(app.activeMs)}%` }} />
+                  </span>
+                  <span className="app__active">{duration(app.activeMs)}</span>
+                </li>
+              ))}
+              {idleMs > 0 ? (
+                <li className="app app--idle">
+                  <span className="app__name">Idle</span>
+                  <span className="app__bar">
+                    <span className="app__fill" style={{ width: `${share(idleMs)}%` }} />
+                  </span>
+                  <span className="app__active">{duration(idleMs)}</span>
+                </li>
+              ) : null}
+            </ol>
+            <p className="panel__hint">
+              Idle is time a window sat in front with nothing happening. It belongs to no
+              application. Time while the screen was locked or asleep is in neither figure.
+            </p>
+          </>
         ) : (
           <p className="empty">Nothing was recorded on this day.</p>
         )}

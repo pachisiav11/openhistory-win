@@ -7,13 +7,13 @@
  */
 import { useEffect, useState } from "react";
 import { searchHistory, type SearchHit } from "../lib/ipc";
-import { clockTime, duration } from "../lib/format";
+import { clockTime, duration, localHour } from "../lib/format";
 
 const DEBOUNCE_MS = 300;
 const LIMIT = 50;
 
 interface Props {
-  onOpenDay: (date: string) => void;
+  onOpenDay: (date: string, hour?: number) => void;
 }
 
 export default function Search({ onOpenDay }: Props) {
@@ -81,7 +81,11 @@ export default function Search({ onOpenDay }: Props) {
           <ol className="hits">
             {hits.map((hit) => (
               <li key={hit.id} className={`hit${hit.isPrivate ? " hit--private" : ""}`}>
-                <button type="button" className="hit__open" onClick={() => onOpenDay(hit.date)}>
+                <button
+                  type="button"
+                  className="hit__open"
+                  onClick={() => onOpenDay(hit.date, localHour(hit.start))}
+                >
                   <span className="hit__app">{hit.app}</span>
                   <span className="hit__title">
                     {hit.isPrivate ? "Private browsing — title not recorded" : (hit.title ?? "")}

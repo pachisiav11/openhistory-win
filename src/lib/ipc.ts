@@ -197,9 +197,15 @@ export interface HourlyRollup {
   episodeIds: string[];
 }
 
+/**
+ * `activeMs` is time there is evidence for; `idleMs` is the rest of the time the day's
+ * episodes span, when a window sat in front and nothing happened in it. Together they
+ * are the day's screen time. Locked and sleeping stretches are in neither.
+ */
 export interface DailyRollup {
   date: string;
   activeMs: number;
+  idleMs: number;
   episodes: number;
   apps: AppUsage[];
   hours: HourlyRollup[];

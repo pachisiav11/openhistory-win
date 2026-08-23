@@ -29,6 +29,10 @@ pub struct DayView {
     pub date: String,
     /// Measured active time across the day.
     pub active_ms: i64,
+    /// Time at the machine with nothing happening. Belongs to no application.
+    pub idle_ms: i64,
+    /// `active_ms` and `idle_ms` together: the whole time spent at the machine.
+    pub screen_ms: i64,
     pub episode_count: usize,
     /// How many of those were private, and so carry times only.
     pub private_episodes: usize,
@@ -111,6 +115,8 @@ impl History {
         Ok(DayView {
             date: report.date.clone(),
             active_ms: report.rollup.active_ms,
+            idle_ms: report.rollup.idle_ms,
+            screen_ms: report.rollup.screen_ms(),
             episode_count: report.episodes.len(),
             private_episodes: report.rollup.private_episodes,
             apps: report.rollup.apps.clone(),
@@ -306,6 +312,7 @@ mod tests {
         let view = history.day(empty, true).unwrap();
         assert_eq!(view.episode_count, 0);
         assert_eq!(view.active_ms, 0);
+        assert_eq!(view.screen_ms, 0);
         assert!(history.recent(5, empty).unwrap().is_empty());
     }
 

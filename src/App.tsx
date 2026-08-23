@@ -68,10 +68,18 @@ export default function App() {
       .finally(() => setBusy(false));
   }, [status?.running, fail]);
 
-  const openDay = useCallback((date: string) => {
+  // A search result knows the hour it happened in, so opening the day from one should
+  // land on that hour rather than at the top of the day. The Day view consumes the
+  // request and clears it, so clicking the same result twice asks again.
+  const [focusHour, setFocusHour] = useState<number | null>(null);
+
+  const openDay = useCallback((date: string, hour?: number) => {
     setDay(date);
+    setFocusHour(hour ?? null);
     setView("day");
   }, []);
+
+  const clearFocus = useCallback(() => setFocusHour(null), []);
 
   const running = status?.running ?? false;
 
@@ -134,7 +142,15 @@ export default function App() {
       <main className="view">
         {view === "timeline" ? <Timeline revision={revision} onOpenDay={openDay} /> : null}
         {view === "search" ? <Search onOpenDay={openDay} /> : null}
-        {view === "day" ? <DayView date={day} onChangeDate={setDay} revision={revision} /> : null}
+        {view === "day" ? (
+          <DayView
+            date={day}
+            onChangeDate={setDay}
+            revision={revision}
+            focusHour={focusHour}
+            onFocused={clearFocus}
+          />
+        ) : null}
         {view === "settings" ? <Settings onChanged={() => setRevision((n) => n + 1)} /> : null}
       </main>
 

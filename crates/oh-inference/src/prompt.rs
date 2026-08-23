@@ -283,6 +283,7 @@ mod tests {
         DailyRollup {
             date: "2026-08-22".into(),
             active_ms: 3_600_000,
+            idle_ms: 0,
             episodes: 12,
             apps: vec![AppUsage {
                 app: "Visual Studio Code".into(),

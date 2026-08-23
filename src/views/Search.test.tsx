@@ -80,17 +80,32 @@ describe("Search", () => {
     expect(await screen.findByText(/Nothing matched every word/)).toBeInTheDocument();
   });
 
-  it("opens the day a result came from", async () => {
+  it("opens the day a result came from, at the hour it happened in", async () => {
     backend();
-    mockCommand("search_history", () => [hit({ date: "2026-08-19" })]);
-    const opened: string[] = [];
-    render(<Search onOpenDay={(date) => opened.push(date)} />);
+    // Built in local time, because the hour a day is filed under is the local one.
+    const start = new Date(2026, 7, 19, 15, 12).toISOString();
+    mockCommand("search_history", () => [hit({ date: "2026-08-19", start })]);
+    const opened: [string, number | undefined][] = [];
+    render(<Search onOpenDay={(date, hour) => opened.push([date, hour])} />);
 
     const user = userEvent.setup();
     await user.type(screen.getByRole("searchbox", { name: "Search history" }), "code");
     await user.click(await screen.findByRole("button", { name: /Visual Studio Code/ }));
 
-    expect(opened).toEqual(["2026-08-19"]);
+    expect(opened).toEqual([["2026-08-19", 15]]);
+  });
+
+  it("asks for no hour when a result carries an unreadable time", async () => {
+    backend();
+    mockCommand("search_history", () => [hit({ date: "2026-08-19", start: "not a time" })]);
+    const opened: [string, number | undefined][] = [];
+    render(<Search onOpenDay={(date, hour) => opened.push([date, hour])} />);
+
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("searchbox", { name: "Search history" }), "code");
+    await user.click(await screen.findByRole("button", { name: /Visual Studio Code/ }));
+
+    expect(opened).toEqual([["2026-08-19", undefined]]);
   });
 
   it("reports a failed search rather than showing stale results", async () => {

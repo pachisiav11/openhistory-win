@@ -416,6 +416,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(&body).unwrap();
         assert!(parsed.get("episodes").is_none(), "{body}");
         assert!(parsed["activeMs"].as_i64().unwrap() > 0, "{body}");
+        assert!(
+            parsed["screenMs"].as_i64().unwrap() >= parsed["activeMs"].as_i64().unwrap(),
+            "{body}"
+        );
         assert!(parsed["episodeCount"].as_u64().unwrap() > 0, "{body}");
     }
 

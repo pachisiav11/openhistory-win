@@ -63,6 +63,7 @@ export function report(episodes: Episode[] = [episode()], hours: HourlyRollup[] 
     rollup: {
       date: localDate(),
       activeMs: episodes.reduce((sum, one) => sum + one.activeMs, 0),
+      idleMs: episodes.reduce((sum, one) => sum + Math.max(0, one.durationMs - one.activeMs), 0),
       episodes: episodes.length,
       apps: [...totals.values()].sort((a, b) => b.activeMs - a.activeMs),
       hours,

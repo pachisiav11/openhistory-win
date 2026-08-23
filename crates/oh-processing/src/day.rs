@@ -433,6 +433,30 @@ mod tests {
     }
 
     #[test]
+    fn a_report_written_before_idle_time_existed_is_derived_again() {
+        let temp = history(&workday());
+        let mut processor = Processor::in_root(temp.path()).unwrap();
+        let fresh = processor.process_day(date()).unwrap();
+
+        // Exactly what an older version wrote: everything but the newest measurement.
+        let path = temp.path().join("episodes").join("2026-08-21.json");
+        let mut stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        stored["rollup"]
+            .as_object_mut()
+            .unwrap()
+            .remove("idleMs")
+            .expect("the field must be written in the first place");
+        std::fs::write(&path, serde_json::to_string(&stored).unwrap()).unwrap();
+
+        assert!(
+            processor.load_day(date()).unwrap().is_none(),
+            "an old report must not read back as a day with no idle time"
+        );
+        assert_eq!(processor.day(date()).unwrap().rollup, fresh.rollup);
+    }
+
+    #[test]
     fn writing_a_report_leaves_no_temporary_file_behind() {
         let temp = history(&workday());
         Processor::in_root(temp.path())

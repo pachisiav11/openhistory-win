@@ -494,6 +494,7 @@ mod tests {
             rollup: DailyRollup {
                 date: "2026-08-22".into(),
                 active_ms: 1_800_000,
+                idle_ms: 0,
                 episodes: 2,
                 apps: vec![AppUsage {
                     app: "Visual Studio Code".into(),
@@ -743,6 +744,7 @@ mod tests {
             rollup: DailyRollup {
                 date: "2026-08-22".into(),
                 active_ms: 0,
+                idle_ms: 0,
                 episodes: 0,
                 apps: Vec::new(),
                 hours: Vec::new(),
@@ -884,6 +886,7 @@ mod tests {
             rollup: DailyRollup {
                 date: "2026-08-22".into(),
                 active_ms: 900_000,
+                idle_ms: 0,
                 episodes: 1,
                 apps: Vec::new(),
                 hours: vec![hourly(9, &["p"], 900_000)],

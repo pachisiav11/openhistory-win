@@ -104,7 +104,9 @@ function sampleEpisodes(): Episode[] {
       start: minutesAgo(45),
       end: minutesAgo(22),
       durationMs: 23 * 60_000,
-      activeMs: 23 * 60_000,
+      // Twenty-three minutes in the editor, eight of them with nothing happening, so
+      // the preview shows an idle share rather than a day of perfect evidence.
+      activeMs: 15 * 60_000,
       eventCount: 6,
       isPrivate: false,
     },
@@ -182,6 +184,7 @@ function sampleReport(): DayReport {
     rollup: {
       date: localToday(),
       activeMs: episodes.reduce((sum, one) => sum + one.activeMs, 0),
+      idleMs: episodes.reduce((sum, one) => sum + Math.max(0, one.durationMs - one.activeMs), 0),
       episodes: episodes.length,
       apps: [...totals.values()].sort((a, b) => b.activeMs - a.activeMs),
       hours: [...hours.values()].sort((a, b) => a.hour - b.hour),
@@ -199,6 +202,7 @@ function emptyReport(date: string): DayReport {
     rollup: {
       date,
       activeMs: 0,
+      idleMs: 0,
       episodes: 0,
       apps: [],
       hours: [],

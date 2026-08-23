@@ -13,6 +13,17 @@ export function duration(ms: number): string {
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 }
 
+/**
+ * The local hour a timestamp falls in, or undefined if it cannot be read.
+ *
+ * Rollups file an episode under the local hour, so a timestamp has to be converted the
+ * same way before it can be matched against one.
+ */
+export function localHour(timestamp: string): number | undefined {
+  const when = new Date(timestamp);
+  return Number.isNaN(when.getTime()) ? undefined : when.getHours();
+}
+
 /** A timestamp as local `HH:MM`, or `--:--` if it cannot be read. */
 export function clockTime(timestamp: string): string {
   const when = new Date(timestamp);

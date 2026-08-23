@@ -1,7 +1,8 @@
 # Handoff — OpenHistory for Windows
 
-Last updated 2026-08-23, after the launch-hang fix, the sign-in setting and the consent
-fix. Read this before touching anything.
+Last updated 2026-08-23, after the launch-hang fix, the sign-in setting, the consent
+fix, and the day's screen-time and search-to-hour work. Read this before touching
+anything.
 
 ## Where the project stands
 
@@ -74,8 +75,8 @@ Everything below was run and passed:
 
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
-- `cargo test --workspace` — 255 passed, 0 failed.
-- `npm test` — 52 passed.
+- `cargo test --workspace` — 258 passed, 0 failed.
+- `npm test` — 58 passed.
 - `npm run build` and `npx tsc --noEmit` — clean.
 - The golden path driven in the browser preview: choose a model, store a key, give
   consent, enable the MCP server and see a token once, read the client snippet, write a
@@ -93,6 +94,13 @@ cargo test -p openhistory-win --test persistence -- --ignored --test-threads=1
 
 **Known flake, not a defect:** `LNK1104: cannot open file …exe` sometimes appears when
 relinking a test binary immediately after running it. Re-run the command; it links.
+
+**Second known flake:** `lets the user agree to cloud summaries before any model is
+chosen` in `src/views/Settings.test.tsx` timed out twice in about twenty whole-suite runs
+on a loaded machine, and never once in twenty-two runs afterwards, including ten of that
+file alone. Its `waitFor` uses the 1000 ms default while five test files run in parallel.
+Nothing in the test or the view depends on real time. Re-run it; if it ever fails twice
+in a row, that is new and worth reading properly.
 
 ## Traps that cost time before
 
@@ -113,6 +121,14 @@ relinking a test binary immediately after running it. Re-run the command; it lin
   `describe` now refuses our own windows, and the collector releases its caller before
   taking the snapshot. See AD-19.
 
+- **jsdom implements no scrolling at all.** `Element.prototype.scrollIntoView` is
+  undefined there, so a view that scrolls a row into sight throws in the test suite for a
+  reason that has nothing to do with the view. `src/test/setup.ts` stubs it.
+- **A one-shot request passed as a prop has to be consumed.** The Day view is told which
+  hour to scroll to. Held as ordinary state in the shell, clicking the same search result
+  twice sets the value it already holds, React sees no change and the second click does
+  nothing. The Day view calls `onFocused` to clear the request, and keeps the mark as its
+  own state. See AD-23.
 - The model catalog cannot be written from memory. The first version had three
   repositories that do not exist and two whose sizes were wrong by nearly half. Check
   every entry against the repository's own file listing. See AD-5.

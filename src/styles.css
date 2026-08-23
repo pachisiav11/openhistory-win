@@ -510,6 +510,13 @@ body {
   color: var(--muted);
 }
 
+/* The hour a search result was opened at, so the eye lands on it. */
+.hourbar--marked {
+  border-radius: 6px;
+  outline: 1px solid var(--accent-dim);
+  outline-offset: 6px;
+}
+
 .hourbar__track,
 .app__bar {
   height: 8px;
@@ -545,6 +552,28 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Idle is not an application, and should not read as one. */
+.app--idle .app__name,
+.app--idle .app__active {
+  color: var(--muted);
+}
+
+.app--idle .app__fill {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.apps + .panel__hint {
+  margin: 14px 0 0;
+}
+
+.panel__total {
+  margin: 0 0 12px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Settings ───────────────────────────────────────────────────────────────── */

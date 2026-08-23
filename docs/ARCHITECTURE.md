@@ -604,3 +604,59 @@ the moment of sending rather than at the moment of choosing.
 label says so. Agreement given in that state is real and will apply the moment a cloud
 model is chosen — the user has answered the question in advance, which is the point.
 
+
+## AD-22: Idle time is measured; absence is not
+
+**Decision.** A daily rollup carries `idle_ms` beside `active_ms`. Idle is the part of an
+episode's span there was no evidence for: a window sat in front and nothing happened in
+it. The two together are the day's screen time. Time between episodes is in neither
+term, and no application is ever credited with idle time.
+
+**Why.** AD-11 already separates an episode's elapsed time from the part there is
+evidence for, and the rollup deliberately measured with the second. That is right for
+"how long did I work on this" and wrong for "how long was I at this machine", and the
+Day view only ever answered the first. A person who spent an hour reading a specification
+saw ten minutes and concluded the recorder was broken.
+
+The distinction that matters is between idleness and absence, and the episode boundaries
+already draw it. A lock, a sleep, or a silence longer than `IDLE_SPLIT` closes an
+episode, so every one of those stretches falls *between* two episodes. Anything left
+*inside* an episode is time the machine was in use. Summing `duration_ms - active_ms`
+therefore counts exactly the sitting-and-reading time and none of the walked-away time,
+without the rollup needing to see the raw events at all.
+
+Idle belongs to no application even though the episode it came from names one. Crediting
+Word with the forty minutes a document sat open untouched would make the per-application
+ranking a measure of what was left open rather than what was used, which is the failure
+mode the active/elapsed split exists to prevent.
+
+**Consequence.** Screen time understates a long, quiet stretch: a silence beyond fifteen
+minutes ends the episode and is then counted nowhere. That is the conservative direction.
+The numbers can say less happened than did; they cannot say more happened than did.
+
+`idle_ms` is deliberately not `#[serde(default)]`. A stored report written before the
+field existed fails to parse, and `Processor::load_day` already treats an unreadable
+derived file as a reason to rebuild the day from the event log rather than as a failure.
+Defaulting it would have been quieter and would have made every past day report no idle
+time at all, which reads as a broken feature rather than an old file.
+
+## AD-23: A search result opens the hour it happened in
+
+**Decision.** Clicking a search result switches to the Day view for that episode's date
+and scrolls to the hour the episode started in, marking that hour. The Day view treats
+the hour as a request it consumes: it marks the hour, then tells the shell it has
+arrived, so clicking the same result again asks again.
+
+**Why.** A result already knew its date and its time, and opening the day threw the time
+away — on a day with fourteen hours of rows, that is a page of scrolling to find the
+thing that was just clicked. The hour is derived from the episode's start in local time,
+because that is how the rollup files it.
+
+Consuming the request is what makes a repeat click work. Held as ordinary state, the
+second click sets the value it already holds, React sees no change, and nothing happens —
+a control that works once and then appears broken. The mark itself is state in the Day
+view, so it outlives the request and survives the day being reprocessed underneath it.
+
+**Consequence.** The mark is cleared by changing the date and by nothing else. It stays
+while the day refreshes and while a summary is written, which is what someone who came
+from a search wants: the hour they asked about stays findable.

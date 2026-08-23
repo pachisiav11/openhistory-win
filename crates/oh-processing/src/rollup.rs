@@ -51,6 +51,15 @@ impl HourlyRollup {
 pub struct DailyRollup {
     pub date: String,
     pub active_ms: i64,
+    /// The rest of the time the day's episodes span: a window sat in front and nothing
+    /// happened in it. It belongs to no application, so it appears in no `AppUsage`,
+    /// but the person was still at the machine and it is still screen time.
+    ///
+    /// Deliberately not defaulted. A report written before this field existed fails to
+    /// parse, which is how `Processor::load_day` is told to derive the day again — a
+    /// day that quietly reported no idle time at all would look like a broken feature
+    /// rather than an old file.
+    pub idle_ms: i64,
     pub episodes: usize,
     /// Applications used, most time first.
     pub apps: Vec<AppUsage>,
@@ -65,11 +74,24 @@ pub struct DailyRollup {
     pub private_episodes: usize,
 }
 
+impl DailyRollup {
+    /// The whole time spent at the machine: worked time and idle time together.
+    ///
+    /// Time the session was locked, the screen was asleep, or the collector was
+    /// stopped is in neither term. Each of those closes an episode, so such a stretch
+    /// falls between two episodes rather than inside one, and time between episodes is
+    /// counted nowhere. Absence is not idleness.
+    pub fn screen_ms(&self) -> i64 {
+        self.active_ms + self.idle_ms
+    }
+}
+
 /// Roll a day's episodes up into hourly and daily totals.
 pub fn roll_up(date: NaiveDate, episodes: &[Episode]) -> DailyRollup {
     let mut hours: BTreeMap<u32, HourBuilder> = BTreeMap::new();
     let mut totals: BTreeMap<String, (i64, usize)> = BTreeMap::new();
     let mut active_ms = 0i64;
+    let mut idle_ms = 0i64;
     let mut private_episodes = 0usize;
     let mut first: Option<DateTime<Utc>> = None;
     let mut last: Option<DateTime<Utc>> = None;
@@ -80,6 +102,7 @@ pub fn roll_up(date: NaiveDate, episodes: &[Episode]) -> DailyRollup {
         };
 
         active_ms += episode.active_ms;
+        idle_ms += (episode.duration_ms - episode.active_ms).max(0);
         if episode.is_private {
             private_episodes += 1;
         }
@@ -99,6 +122,7 @@ pub fn roll_up(date: NaiveDate, episodes: &[Episode]) -> DailyRollup {
     DailyRollup {
         date: date.format("%Y-%m-%d").to_string(),
         active_ms,
+        idle_ms,
         episodes: episodes.len(),
         apps: rank(totals),
         hours: hours.into_values().map(HourBuilder::finish).collect(),
@@ -358,6 +382,52 @@ mod tests {
     }
 
     #[test]
+    fn idle_time_is_still_screen_time_and_belongs_to_no_application() {
+        // An hour on the clock, five minutes of evidence.
+        let mut idle = episode("a", "Visual Studio Code", 9, 0, 60);
+        idle.active_ms = Duration::minutes(5).num_milliseconds();
+
+        let rollup = roll_up(date(), &[idle]);
+        assert_eq!(rollup.idle_ms, Duration::minutes(55).num_milliseconds());
+        assert_eq!(rollup.screen_ms(), Duration::minutes(60).num_milliseconds());
+        assert_eq!(
+            rollup.apps[0].active_ms,
+            Duration::minutes(5).num_milliseconds(),
+            "the idle 55 minutes must not be credited to the application"
+        );
+    }
+
+    #[test]
+    fn a_day_of_unbroken_evidence_has_no_idle_time() {
+        let episodes = [
+            episode("a", "Visual Studio Code", 9, 0, 40),
+            episode("b", "Slack", 9, 40, 20),
+        ];
+
+        let rollup = roll_up(date(), &episodes);
+        assert_eq!(rollup.idle_ms, 0);
+        assert_eq!(rollup.screen_ms(), rollup.active_ms);
+    }
+
+    #[test]
+    fn a_locked_stretch_between_episodes_is_neither_worked_nor_idle() {
+        // Nine to ten, then away until two, then two to three. Being away is not
+        // being at the machine doing nothing.
+        let episodes = [
+            episode("a", "Visual Studio Code", 9, 0, 60),
+            episode("b", "Visual Studio Code", 14, 0, 60),
+        ];
+
+        let rollup = roll_up(date(), &episodes);
+        assert_eq!(rollup.idle_ms, 0);
+        assert_eq!(
+            rollup.screen_ms(),
+            Duration::minutes(120).num_milliseconds(),
+            "the four hours away are in neither term"
+        );
+    }
+
+    #[test]
     fn the_leading_application_of_an_hour_is_the_one_with_the_most_time() {
         let episodes = [
             episode("a", "Slack", 14, 0, 10),
@@ -397,6 +467,8 @@ mod tests {
     fn an_empty_day_rolls_up_to_nothing_rather_than_failing() {
         let rollup = roll_up(date(), &[]);
         assert_eq!(rollup.active_ms, 0);
+        assert_eq!(rollup.idle_ms, 0);
+        assert_eq!(rollup.screen_ms(), 0);
         assert_eq!(rollup.episodes, 0);
         assert!(rollup.apps.is_empty());
         assert!(rollup.hours.is_empty());

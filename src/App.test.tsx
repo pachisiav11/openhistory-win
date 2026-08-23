@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "./App";
 import { clearMocks, emitStatus, mockCommand, type AppInfo } from "./lib/ipc";
-import { DATA_DIR, backend, report, status } from "./test/fixtures";
+import { DATA_DIR, MINUTE, backend, episode, hit, report, status } from "./test/fixtures";
 
 afterEach(() => {
   clearMocks();
@@ -56,6 +56,32 @@ describe("App shell", () => {
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
     expect(await screen.findByRole("region", { name: "Recording" })).toBeInTheDocument();
+  });
+
+  it("carries a search result through to the hour of its day", async () => {
+    const start = new Date(2026, 7, 19, 10, 30).toISOString();
+    backend({
+      day: report(
+        [episode({ start })],
+        [
+          { hour: 9, activeMs: 45 * MINUTE, apps: [], episodeIds: ["a"] },
+          { hour: 10, activeMs: 15 * MINUTE, apps: [], episodeIds: ["b"] },
+        ],
+      ),
+    });
+    mockCommand("search_history", () => [hit({ date: "2026-08-19", start })]);
+    render(<App />);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Search" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search history" }), "code");
+    await user.click(await screen.findByRole("button", { name: /Visual Studio Code/ }));
+
+    expect(await screen.findByRole("region", { name: "Day view" })).toBeInTheDocument();
+    expect(screen.getByText("2026-08-19")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText("10:00").closest("li")).toHaveAttribute("aria-current", "location"),
+    );
   });
 });
 
