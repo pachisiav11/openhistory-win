@@ -507,3 +507,43 @@ The mock is not generated from the Rust commands and nothing checks that the two
 a command renamed in Rust fails at runtime in the app while the browser build keeps
 working. `npm run build` and `cargo build` are both in the gate, but the seam between
 them is only covered by running the real application.
+
+## AD-19: The collector never reads a window of its own process
+
+**Decision.** `describe` refuses any window owned by this process, and the collector
+signals that it has started before it looks at the window that is already in the
+foreground rather than after.
+
+**Why.** Reading a window is not a passive act. `GetWindowTextLengthW` and
+`GetWindowTextW` send `WM_GETTEXTLENGTH` and `WM_GETTEXT` to the thread that owns the
+window and wait for it to answer, and a thread only answers while it is pumping its
+message queue. Between processes Windows short-circuits this — the documented reason
+being that one hung program must not hang another — but within a process the message is
+genuinely sent and genuinely waited on.
+
+The collector runs on its own thread; the application's window belongs to the main one.
+`Collector::start` blocks the caller until the hooks are up, and the caller at launch is
+Tauri's `setup`, which runs on the main thread. So the ordering was: the main thread
+creates and shows the window, calls `setup`, starts the collector, and waits. The
+collector thread installs its hooks, asks which window is in front, gets ours, and asks
+the main thread for its title. The main thread is waiting for the collector; the
+collector is waiting for the main thread. Neither ever moves, the window never pumps
+another message, and Windows draws it as "Not responding".
+
+The WinEvent hooks were never exposed to this: they are installed with
+`WINEVENT_SKIPOWNPROCESS`, so our own foreground changes and title changes never arrive.
+The opening snapshot was the one path into the collector that the flag did not cover,
+and it ran on every launch.
+
+Releasing the caller before the snapshot is the second half. Describing a foreign window
+can be slow — the privacy assessment walks another process's accessibility tree — and a
+user interface must not wait on a stranger's window to finish starting up. Nothing about
+the snapshot needs the caller to be blocked; only the hooks and the `collectorStarted`
+event do, and both still happen first.
+
+**Consequence.** OpenHistory's own window is absent from the history, which is right:
+the timeline is a record of what the user was working in, and the window that displays
+the timeline is not that. The two guards are independent — either one alone stops the
+deadlock — and that is deliberate, because each also answers a failure the other does
+not.
+

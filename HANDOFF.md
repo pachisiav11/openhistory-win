@@ -1,6 +1,6 @@
 # Handoff — OpenHistory for Windows
 
-Last updated 2026-08-22, at the end of Phase 6. Read this before touching anything.
+Last updated 2026-08-23, after the launch-hang fix. Read this before touching anything.
 
 ## Where the project stands
 
@@ -73,7 +73,7 @@ Everything below was run and passed:
 
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
-- `cargo test --workspace` — 246 passed, 0 failed.
+- `cargo test --workspace` — 250 passed, 0 failed.
 - `npm test` — 50 passed.
 - `npm run build` and `npx tsc --noEmit` — clean.
 - The golden path driven in the browser preview: choose a model, store a key, give
@@ -94,6 +94,16 @@ cargo test -p openhistory-win --test persistence -- --ignored --test-threads=1
 relinking a test binary immediately after running it. Re-run the command; it links.
 
 ## Traps that cost time before
+
+- **Never read one of our own windows from the collector thread.** `GetWindowTextW` and
+  `GetWindowTextLengthW` send a message to the thread that owns the window and wait for
+  it to be pumped. Between processes Windows short-circuits that; inside one process it
+  does not. The collector's opening snapshot did exactly this to the application's own
+  window while the main thread sat inside `Collector::start` waiting for the collector,
+  and the window was drawn as "Not responding" on every launch that put it in front. The
+  WinEvent hooks were never exposed to it because they carry `WINEVENT_SKIPOWNPROCESS`.
+  `describe` now refuses our own windows, and the collector releases its caller before
+  taking the snapshot. See AD-19.
 
 - The model catalog cannot be written from memory. The first version had three
   repositories that do not exist and two whose sizes were wrong by nearly half. Check

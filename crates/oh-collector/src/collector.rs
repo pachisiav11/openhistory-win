@@ -122,6 +122,14 @@ impl CollectorState {
     /// Build the descriptor for a window's owning process, or `None` when the process
     /// is gone, unreadable, or excluded from recording.
     fn describe(&self, hwnd: HWND) -> Option<(ApplicationDescriptor, String)> {
+        // Our own windows are never activity worth recording, and reading one would
+        // hang: the title arrives by a message the main thread has to pump, and the
+        // main thread may well be waiting on this one. The hooks skip this process
+        // for the same reason; this covers the paths the hooks do not drive.
+        if win::is_own_window(hwnd) {
+            return None;
+        }
+
         let pid = win::window_process_id(hwnd)?;
         let path = win::process_image_path(pid)?;
         let stem = win::file_stem(&path);
@@ -559,14 +567,18 @@ fn collector_thread(
 
     with_state(|state| state.handle_simple(EventKind::CollectorStarted));
 
+    let thread_id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+    let _ = ready.send(Ok((thread_id, window.0 as isize)));
+
     // Report the window that is already in front, so a session that begins with the
     // user mid-task is not blank until they switch away.
+    //
+    // This happens after the caller has been released. Describing a window can call
+    // into the window's own process, which may be slow or stopped, and the caller is
+    // usually a user interface starting up: it must not wait on a stranger's window.
     if let Some(hwnd) = win::foreground_window() {
         with_state(|state| state.handle_foreground(hwnd));
     }
-
-    let thread_id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
-    let _ = ready.send(Ok((thread_id, window.0 as isize)));
 
     run_message_loop();
 
@@ -655,7 +667,100 @@ fn cleanup(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+
     use super::*;
+
+    /// A message-only window owned by the calling thread, titled so that anything
+    /// which does read it produces something recognisable.
+    fn create_owned_window() -> HWND {
+        let class_name: PCWSTR = w!("OpenHistoryCollectorTestWindow");
+        let instance = unsafe { GetModuleHandleW(None) }.expect("module handle");
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(window_proc),
+            hInstance: instance.into(),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        unsafe { RegisterClassW(&class) };
+
+        unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                class_name,
+                w!("OpenHistory itself"),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                Some(instance.into()),
+                None,
+            )
+        }
+        .expect("the test window must be created")
+    }
+
+    fn test_state(sink: EventSink) -> CollectorState {
+        CollectorState {
+            sink,
+            automation: None,
+            config: CollectorConfig::default(),
+            last_pid: None,
+            last_app_name: None,
+            last_title: None,
+            last_url: None,
+        }
+    }
+
+    #[test]
+    fn our_own_window_is_neither_recorded_nor_waited_on() {
+        // The launch deadlock, in miniature. One thread owns a window and does not
+        // pump for it — as the application's main thread does not while it waits for
+        // the collector to start — and the collector, on another thread, is handed
+        // that window as the one in front. Without the guard in `describe` this asks
+        // the owning thread for a title it will never answer, and both threads stop
+        // for good.
+        let (created, window) = mpsc::channel::<isize>();
+        let (release, released) = mpsc::channel::<()>();
+        let owner = std::thread::spawn(move || {
+            let window = create_owned_window();
+            let _ = created.send(window.0 as isize);
+            // Deliberately not pumping: this thread is standing in for a main thread
+            // blocked inside `Collector::start`.
+            let _ = released.recv();
+            let _ = unsafe { DestroyWindow(window) };
+        });
+
+        let handle = window.recv_timeout(Duration::from_secs(5)).expect("window");
+
+        let (finished, outcome) = mpsc::channel::<Option<ActivityEvent>>();
+        let collector = std::thread::spawn(move || {
+            let (recorded, events) = mpsc::channel::<ActivityEvent>();
+            let mut state = test_state(Box::new(move |event| {
+                let _ = recorded.send(event);
+            }));
+            state.handle_foreground(HWND(handle as *mut core::ffi::c_void));
+            let _ = finished.send(events.try_recv().ok());
+        });
+
+        let seen = outcome
+            .recv_timeout(Duration::from_secs(5))
+            .expect("describing our own window must not wait on the thread that owns it");
+        assert!(
+            seen.is_none(),
+            "a window of this process reached the timeline: {seen:?}"
+        );
+
+        collector.join().expect("the collector thread must finish");
+        let _ = release.send(());
+        owner.join().expect("the owning thread must finish");
+    }
 
     #[test]
     fn shell_chrome_is_not_an_application() {

@@ -83,6 +83,17 @@ pub fn window_process_id(hwnd: HWND) -> Option<u32> {
     (pid != 0).then_some(pid)
 }
 
+/// True when a window belongs to this process.
+///
+/// Reading a window is not thread-safe against ourselves: `GetWindowTextW` on a
+/// window owned by another thread of the same process sends `WM_GETTEXT` and waits
+/// for that thread to pump it. The collector runs on its own thread while the
+/// application's window is owned by the main one, so asking about our own window
+/// while the main thread waits on the collector would deadlock both.
+pub fn is_own_window(hwnd: HWND) -> bool {
+    window_process_id(hwnd) == Some(current_process_id())
+}
+
 fn open_for_query(pid: u32) -> Option<OwnedHandle> {
     // SYNCHRONIZE is requested so the same handle can answer whether the process has
     // exited; see `process_is_alive`.
@@ -223,7 +234,68 @@ fn version_string(block: &[u8], query: &HSTRING) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, HWND_MESSAGE, MSG,
+        PM_REMOVE, PeekMessageW, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+        WNDCLASSW,
+    };
+    use windows::core::{PCWSTR, w};
+
     use super::*;
+
+    unsafe extern "system" fn test_window_proc(
+        hwnd: HWND,
+        message: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+
+    /// A message-only window owned by the calling thread, with a title to read.
+    fn create_test_window() -> HWND {
+        let class_name: PCWSTR = w!("OpenHistoryWinTestWindow");
+        let instance = unsafe { GetModuleHandleW(None) }.expect("module handle");
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(test_window_proc),
+            hInstance: instance.into(),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        unsafe { RegisterClassW(&class) };
+
+        unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                class_name,
+                w!("a title only this thread can hand over"),
+                WINDOW_STYLE(0),
+                0,
+                0,
+                0,
+                0,
+                Some(HWND_MESSAGE),
+                None,
+                Some(instance.into()),
+                None,
+            )
+        }
+        .expect("the test window must be created")
+    }
+
+    /// Run the calling thread's message queue until it is empty.
+    fn pump() {
+        let mut message = MSG::default();
+        while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+            let _ = unsafe { TranslateMessage(&message) };
+            unsafe { DispatchMessageW(&message) };
+        }
+    }
 
     #[test]
     fn reads_own_process_identity() {
@@ -283,5 +355,59 @@ mod tests {
     fn display_name_falls_back_to_the_file_stem() {
         let missing = PathBuf::from(r"C:\definitely\not\here\SomeTool.exe");
         assert_eq!(display_name(&missing), "SomeTool");
+    }
+
+    #[test]
+    fn a_window_of_this_process_is_recognised_as_ours() {
+        let window = create_test_window();
+        assert!(is_own_window(window), "a window we created is ours");
+        assert_eq!(window_process_id(window), Some(current_process_id()));
+
+        let _ = unsafe { DestroyWindow(window) };
+    }
+
+    #[test]
+    fn an_invalid_window_belongs_to_nobody() {
+        assert!(!is_own_window(HWND(std::ptr::null_mut())));
+    }
+
+    #[test]
+    fn reading_our_own_title_waits_for_the_thread_that_owns_the_window() {
+        // Why `is_own_window` exists. The title of a window in this process arrives
+        // by a message its owning thread has to pump, so a second thread asking for
+        // it gets nothing until this one does. When the owning thread is itself
+        // waiting on that second thread, neither ever moves again.
+        let window = create_test_window();
+        let handle = window.0 as isize;
+
+        let (answered, answer) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let hwnd = HWND(handle as *mut core::ffi::c_void);
+            let _ = answered.send(window_title(hwnd));
+        });
+
+        assert!(
+            answer.recv_timeout(Duration::from_millis(750)).is_err(),
+            "the title came back without this thread pumping for it"
+        );
+
+        // Let the reader finish, so the test leaves no thread stuck behind it.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut title = None;
+        while Instant::now() < deadline {
+            pump();
+            if let Ok(answered) = answer.recv_timeout(Duration::from_millis(50)) {
+                title = answered;
+                break;
+            }
+        }
+        reader.join().expect("the reading thread must finish");
+        let _ = unsafe { DestroyWindow(window) };
+
+        assert_eq!(
+            title.as_deref(),
+            Some("a title only this thread can hand over"),
+            "pumping the queue is what hands the title over"
+        );
     }
 }
