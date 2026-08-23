@@ -6,6 +6,7 @@
 
 pub mod collector_service;
 pub mod mcp;
+pub mod startup;
 pub mod summaries;
 
 use std::sync::Arc;
@@ -128,6 +129,11 @@ async fn set_config(
     // The window sends a model identifier; the path it lives at is resolved here so a
     // window can never point the local provider at an arbitrary file.
     summaries::resolve_local_model(&mut config, None)?;
+
+    // Before the file is written, so a refused registry write leaves the settings
+    // saying what is actually true rather than what was asked for.
+    startup::apply(config.start_with_windows).map_err(to_message)?;
+
     state.apply(config.clone())?;
     state.service.reconfigure(&config).map_err(to_message)?;
 
@@ -325,8 +331,24 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // The window is created hidden so that the copy Windows starts at sign-in
+            // goes to the tray without a window appearing over whatever the user is
+            // doing. Every other launch shows it, and shows it first: the work below
+            // takes long enough to look like a failure to start.
+            if !startup::launched_by_windows()
+                && let Some(window) = app.get_webview_window("main")
+            {
+                let _ = window.show();
+            }
+
             paths::ensure_layout()?;
             let config = Config::load().unwrap_or_default();
+
+            // Windows is told what the setting says on every launch, so an entry
+            // removed by hand or left by an older install is put right.
+            if let Err(error) = startup::apply(config.start_with_windows) {
+                tracing::warn!(%error, "could not update the sign-in entry");
+            }
 
             // Write the defaults out on the first run. The file is the documented way
             // to see and hand-edit what the application is doing, so it should exist

@@ -90,6 +90,7 @@ export function config(overrides: Partial<Config> = {}): Config {
   return {
     recordingEnabled: true,
     startOnLaunch: true,
+    startWithWindows: true,
     retentionDays: 0,
     recording: { excludedApps: ["1password"], captureUrls: true },
     inference: {

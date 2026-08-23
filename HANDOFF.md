@@ -1,6 +1,7 @@
 # Handoff — OpenHistory for Windows
 
-Last updated 2026-08-23, after the launch-hang fix. Read this before touching anything.
+Last updated 2026-08-23, after the launch-hang fix, the sign-in setting and the consent
+fix. Read this before touching anything.
 
 ## Where the project stands
 
@@ -73,8 +74,8 @@ Everything below was run and passed:
 
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
-- `cargo test --workspace` — 250 passed, 0 failed.
-- `npm test` — 50 passed.
+- `cargo test --workspace` — 255 passed, 0 failed.
+- `npm test` — 52 passed.
 - `npm run build` and `npx tsc --noEmit` — clean.
 - The golden path driven in the browser preview: choose a model, store a key, give
   consent, enable the MCP server and see a token once, read the client snippet, write a
@@ -94,6 +95,13 @@ cargo test -p openhistory-win --test persistence -- --ignored --test-threads=1
 relinking a test binary immediately after running it. Re-run the command; it links.
 
 ## Traps that cost time before
+
+- **A test that reads the Windows Credential Manager passes or fails by whose machine it
+  runs on.** `each_cloud_provider_names_its_own_missing_key` asserted that no key was
+  stored, and fell through `secrets::load` to the real credential store to find out. It
+  went red the moment a Google key was saved in the application. `secrets` now has
+  `pretend_missing` alongside `pretend_stored`, and a test that expects a gap says so.
+  Do not let the fall-through back in for anything but the two ignored round-trip tests.
 
 - **Never read one of our own windows from the collector thread.** `GetWindowTextW` and
   `GetWindowTextLengthW` send a message to the thread that owns the window and wait for

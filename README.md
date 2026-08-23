@@ -104,6 +104,12 @@ Delete `episodes/` and `index/` and they are rebuilt from the event log.
 Closing the window leaves the app recording in the tray. Quit from the tray menu to
 stop it entirely.
 
+Windows starts the app when you sign in, so a restart does not leave a hole in the day.
+Started that way it goes straight to the tray without opening a window; started by you
+it opens normally. Turn it off in Settings, which removes the app's entry under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` — nothing is written outside
+your own user.
+
 ## Summaries
 
 Summaries are off until you choose a model. Settings offers one list, grouped by who

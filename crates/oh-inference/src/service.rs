@@ -808,7 +808,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let service = InferenceService::in_dir(temp.path()).unwrap();
 
-        // No key is pretended on this thread, so every provider reports its own gap.
+        // Say outright that nothing is stored. Without this the real Credential
+        // Manager answers, and the test passes only for someone who has never put a
+        // key into the application.
+        secrets::pretend_missing();
+
         for (model, expected) in [
             ("claude-haiku-4-5", "Anthropic API key"),
             ("gpt-5.6-terra", "OpenAI API key"),

@@ -127,6 +127,8 @@ export interface McpConfig {
 export interface Config {
   recordingEnabled: boolean;
   startOnLaunch: boolean;
+  /** Whether Windows launches the application at sign-in. */
+  startWithWindows: boolean;
   retentionDays: number;
   recording: RecordingConfig;
   inference: InferenceConfig;

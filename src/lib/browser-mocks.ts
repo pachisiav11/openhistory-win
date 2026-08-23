@@ -317,6 +317,7 @@ export function installBrowserMocks(): void {
   let config: Config = {
     recordingEnabled: true,
     startOnLaunch: true,
+    startWithWindows: true,
     retentionDays: 0,
     recording: { excludedApps: ["1password", "bitwarden", "keepassxc"], captureUrls: true },
     inference: {

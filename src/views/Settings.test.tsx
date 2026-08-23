@@ -46,6 +46,27 @@ function sevenModels() {
 }
 
 describe("Settings — summaries", () => {
+  it("lets the user agree to cloud summaries before any model is chosen", async () => {
+    // Consent used to appear only once a cloud model was selected, which left a
+    // user who had chosen nothing with no way to agree at all.
+    backend();
+    const saved: Config[] = [];
+    mockCommand("set_config", (args) => {
+      saved.push(args?.config as Config);
+      return args?.config as Config;
+    });
+    mockCommand("cloud_models", sevenModels);
+    render(<Settings onChanged={() => {}} />);
+
+    const agree = await screen.findByRole("checkbox", { name: /Send a reduced description/ });
+    expect(agree).not.toBeChecked();
+    fireEvent.click(agree);
+
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]!.inference.cloudConsent).toBe(true);
+    expect(saved[0]!.inference.provider).toBe("disabled");
+  });
+
   it("offers every model in one dropdown, grouped by who runs it", async () => {
     backend();
     mockCommand("cloud_models", sevenModels);
@@ -101,12 +122,14 @@ describe("Settings — summaries", () => {
     expect(screen.getByText(/need your agreement/)).toBeInTheDocument();
   });
 
-  it("offers no consent checkbox when no cloud model is chosen", async () => {
+  it("offers consent with no model chosen, and says nothing is sent until one is", async () => {
     backend();
     render(<Settings onChanged={() => {}} />);
 
     await screen.findByRole("combobox");
-    expect(screen.queryByText(/Private sessions become an application/)).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Send a reduced description/ })).toBeEnabled();
+    expect(screen.getByText(/a cloud provider/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is sent while the model above is/)).toBeInTheDocument();
   });
 
   it("has a field for each provider's key and never shows a stored one", async () => {
@@ -232,6 +255,29 @@ describe("Settings — the MCP server", () => {
 });
 
 describe("Settings — recording and data", () => {
+  it("starts with Windows out of the box, and saves the change when turned off", async () => {
+    backend();
+    const saved: Config[] = [];
+    mockCommand("set_config", (args) => {
+      saved.push(args?.config as Config);
+      return args?.config as Config;
+    });
+    render(<Settings onChanged={() => {}} />);
+
+    const toggle = await screen.findByRole("checkbox", {
+      name: /Start OpenHistory when I sign in to Windows/,
+    });
+    expect(toggle).toBeChecked();
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]!.startWithWindows).toBe(false);
+    // The two launch settings are separate: one is whether Windows opens the
+    // application, the other is whether it records once open.
+    expect(saved[0]!.startOnLaunch).toBe(true);
+  });
+
   it("saves the exclusion list as names, not as one string", async () => {
     backend();
     const saved: Config[] = [];

@@ -547,3 +547,60 @@ the timeline is not that. The two guards are independent — either one alone st
 deadlock — and that is deliberate, because each also answers a failure the other does
 not.
 
+## AD-20: Windows starts the application, and it starts in the tray
+
+**Decision.** One value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+named `OpenHistory`, holding the quoted path to this executable followed by
+`--autostart`. On by default. The window is created hidden and shown by `setup`, except
+when that flag is present.
+
+**Why.** A history with a hole in it every time the machine restarts is not one you can
+rely on, and the application is a tray program: the cost of it being there is a tray
+icon. That is why the default is on rather than off.
+
+Per-user, not per-machine. The history belongs to one account, the installer writes to
+the user's own profile, and an entry under `HKLM` would need an administrator to set and
+would start the application for people who never installed it.
+
+The flag exists because a recorder that opens a 1280×800 window over whatever you signed
+in to do is a nuisance. It is passed by the Run entry and by nothing else, so the same
+executable opens normally when a person starts it and goes straight to the tray when
+Windows does. Hiding the window after it appears would have been simpler and would have
+shown a flash of it at every sign-in; creating it hidden and showing it in `setup` does
+not. `setup` shows the window before it does anything else, because the work it does
+afterwards takes long enough that a delay would read as a failure to start.
+
+The registry is written at every launch, not only when the setting changes, so an entry
+deleted by hand or left behind by an install at another path is corrected. The write is
+skipped when the value is already right, so an ordinary launch touches the registry once
+and then never again. `config.json` stays the setting the user changed; the registry is
+the copy Windows reads.
+
+**Consequence.** Windows' own startup manager can disable the entry independently — Task
+Manager writes to `StartupApproved\Run` rather than deleting our value — and the
+application cannot see that it has been overruled. Its settings will say it starts with
+Windows while Windows quietly declines. Fighting that would mean re-enabling something
+the user turned off in the operating system's own interface, which is worse.
+
+## AD-21: Agreement to cloud summaries is a standing permission, not a step in a flow
+
+**Decision.** The consent checkbox is always in the Summaries panel, whatever model is
+chosen, and it says that nothing is sent while the model is "No summaries" or one on
+this machine.
+
+**Why.** It used to appear only once a cloud model was selected, which read as a sensible
+progressive disclosure and was in fact a dead end: the model list is the first thing in
+the panel, no model is preselected per AD-13, and a user who had not chosen one had no
+way to agree to anything. The readiness line told them cloud summaries needed their
+agreement while offering nowhere to give it.
+
+Consent is not a step in choosing a model. It is a standing answer to "may this
+application send a reduced description of my day to a company", and it is worth being
+able to give or withdraw at any time, including while the answer has no effect. The
+backend already treated it that way: `cloud_consent` is an independent field, checked at
+the moment of sending rather than at the moment of choosing.
+
+**Consequence.** The checkbox can be ticked while nothing would be sent, which is why the
+label says so. Agreement given in that state is real and will apply the moment a cloud
+model is chosen — the user has answered the question in advance, which is the point.
+

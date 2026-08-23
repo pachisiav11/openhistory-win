@@ -200,6 +200,20 @@ export default function Settings({ onChanged }: Props) {
         <label className="field field--check">
           <input
             type="checkbox"
+            checked={config.startWithWindows}
+            onChange={(event) =>
+              save((current) => ({ ...current, startWithWindows: event.target.checked }))
+            }
+          />
+          <span>
+            Start OpenHistory when I sign in to Windows. Started that way it goes straight to the
+            tray, without opening a window.
+          </span>
+        </label>
+
+        <label className="field field--check">
+          <input
+            type="checkbox"
             checked={config.startOnLaunch}
             onChange={(event) =>
               save((current) => ({ ...current, startOnLaunch: event.target.checked }))
@@ -306,25 +320,27 @@ export default function Settings({ onChanged }: Props) {
           ) : null}
         </label>
 
-        {provider !== "disabled" && provider !== "local" ? (
-          <label className="field field--check">
-            <input
-              type="checkbox"
-              checked={config.inference.cloudConsent}
-              onChange={(event) =>
-                save((current) => ({
-                  ...current,
-                  inference: { ...current.inference, cloudConsent: event.target.checked },
-                }))
-              }
-            />
-            <span>
-              Send a reduced description of each day to {chosen?.vendor ?? "the provider"}. Private
-              sessions become an application and a span of time, addresses lose their query
-              strings, and no file path ever leaves this machine.
-            </span>
-          </label>
-        ) : null}
+        <label className="field field--check">
+          <input
+            type="checkbox"
+            checked={config.inference.cloudConsent}
+            onChange={(event) =>
+              save((current) => ({
+                ...current,
+                inference: { ...current.inference, cloudConsent: event.target.checked },
+              }))
+            }
+          />
+          <span>
+            Send a reduced description of each day to{" "}
+            {provider !== "disabled" && provider !== "local" && chosen
+              ? chosen.vendor
+              : "a cloud provider"}
+            . Private sessions become an application and a span of time, addresses lose their
+            query strings, and no file path ever leaves this machine. Nothing is sent while the
+            model above is “No summaries” or one on this machine.
+          </span>
+        </label>
 
         <label className="field field--check">
           <input

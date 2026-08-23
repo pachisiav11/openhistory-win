@@ -97,8 +97,10 @@ pub fn store(secret: Secret, value: &str) -> Result<()> {
 /// Read a secret. `None` when none has been stored.
 pub fn load(secret: Secret) -> Result<Option<String>> {
     #[cfg(test)]
-    if let Some(pretended) = pretended() {
-        return Ok(Some(pretended));
+    match pretended() {
+        Some(Pretence::Stored(value)) => return Ok(Some(value)),
+        Some(Pretence::Missing) => return Ok(None),
+        None => {}
     }
 
     match entry(secret)?.get_password() {
@@ -126,13 +128,24 @@ pub fn is_stored(secret: Secret) -> bool {
     matches!(load(secret), Ok(Some(_)))
 }
 
+/// What a test has decided the credential store holds.
+///
+/// Absent means the real Credential Manager answers, which only the ignored
+/// round-trip tests below want.
 #[cfg(test)]
-thread_local! {
-    static PRETENDED: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+#[derive(Clone)]
+enum Pretence {
+    Stored(String),
+    Missing,
 }
 
 #[cfg(test)]
-fn pretended() -> Option<String> {
+thread_local! {
+    static PRETENDED: std::cell::RefCell<Option<Pretence>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn pretended() -> Option<Pretence> {
     PRETENDED.with(|slot| slot.borrow().clone())
 }
 
@@ -142,7 +155,17 @@ fn pretended() -> Option<String> {
 /// override is thread-local because the test harness runs tests in parallel.
 #[cfg(test)]
 pub(crate) fn pretend_stored(value: &str) {
-    PRETENDED.with(|slot| *slot.borrow_mut() = Some(value.to_owned()));
+    PRETENDED.with(|slot| *slot.borrow_mut() = Some(Pretence::Stored(value.to_owned())));
+}
+
+/// Behave as though no key were stored, for this thread only.
+///
+/// A test that expects a missing key has to say so. Reading the real store instead
+/// would make it pass or fail according to whether the person running it happens to
+/// use the application.
+#[cfg(test)]
+pub(crate) fn pretend_missing() {
+    PRETENDED.with(|slot| *slot.borrow_mut() = Some(Pretence::Missing));
 }
 
 #[cfg(test)]

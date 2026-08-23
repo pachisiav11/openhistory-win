@@ -333,6 +333,12 @@ pub struct Config {
     pub recording_enabled: bool,
     /// Start collecting as soon as the application launches.
     pub start_on_launch: bool,
+    /// Let Windows launch the application when the user signs in.
+    ///
+    /// On by default. A history with a hole in it every time the machine restarts is
+    /// not a history, and the application is a tray program: launching it costs the
+    /// user nothing they would notice.
+    pub start_with_windows: bool,
     /// Days of history to keep. Zero means keep everything, which is the default: a
     /// personal history that silently deletes itself is not one you can rely on.
     pub retention_days: u32,
@@ -346,6 +352,7 @@ impl Default for Config {
         Config {
             recording_enabled: true,
             start_on_launch: true,
+            start_with_windows: true,
             retention_days: 0,
             recording: RecordingConfig::default(),
             inference: InferenceConfig::default(),
@@ -531,6 +538,10 @@ mod tests {
 
         let config = Config::load_from(&path).unwrap();
         assert!(!config.start_on_launch);
+        assert!(
+            config.start_with_windows,
+            "a setting the file predates arrives at its default"
+        );
         assert_eq!(config.retention_days, 30);
         assert_eq!(config.inference, InferenceConfig::default());
         assert_eq!(config.mcp, McpConfig::default());
