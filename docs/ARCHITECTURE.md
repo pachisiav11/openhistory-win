@@ -664,12 +664,14 @@ from a search wants: the hour they asked about stays findable.
 ## AD-24: The visible text is bounded and redacted where it is written, not where it is read
 
 **Decision.** The collector reads two more things from the accessibility tree: the
-document a window is on, and a bounded sample of the text that window is displaying. The
-sample is capped four ways — at most 80 elements, 4 levels deep, 12 lines of 120
-characters, and 1,000 characters in total — read at most once every thirty seconds per
-window. Every line passes `oh-collector::text` before it reaches the log: password and
-offscreen elements are never visited, runs of twelve or more digits are masked, and a
-long unbroken word that looks like a key, a token or a PEM header is dropped whole.
+document a window is on, and a bounded sample of the text that window is displaying. Both
+come from one walk, capped by elements visited (80), *named* depth (4), children queued
+per element (24), lines kept (12 of 120 characters, 1,000 in total) and a 120 ms wall
+clock,
+with the text read at most once every thirty seconds per window. Every line passes
+`oh-collector::text` before it reaches the log: password and offscreen elements are never
+visited, runs of twelve or more digits are masked, and a long unbroken word that looks
+like a key, a token or a PEM header is dropped whole.
 
 **Why.** This is the capability the original macOS OpenHistory has and the port did not,
 and it is the difference between a summary that says "Visual Studio Code for forty
@@ -681,6 +683,35 @@ cross-process call into the application being read; an unbounded walk of a large
 view can take longer than the interval between window switches, and the collector would
 then be measuring its own latency. Bounding the walk by breadth *and* depth means a
 pathological tree costs a known amount rather than a proportional one.
+
+The clock is there because counting is not enough, and the desktop gate proved it. The
+first version asked UIAutomation for every `Document` descendant in one `FindAll` call,
+which is a whole-tree search executed inside the other process — none of the element caps
+applied until after it returned. `records_a_real_application_switch` went from passing in
+two seconds to timing out at twelve, because the collector was still reading one window
+when the next foreground change arrived, and a termination is noticed at the next
+foreground change. One bounded, breadth-first walk now finds the document and the text
+together, and stops on whichever budget runs out first. A test that drives the real
+desktop is what caught a regression no unit test could see.
+
+The depth budget counts levels that named something, not levels of the tree. The first
+version counted every level, and on Chromium and Electron it therefore reached nothing at
+all: a Chrome window's page text sits ten or eleven levels below the window element,
+behind a spine of seven unnamed `Pane` elements that exist only to hold the next one. The
+installed build recorded `["Claude"]` and `["Notepad"]` — the window's own name and
+nothing else — from windows full of text, and the browser gate now in this suite
+reproduces it. The wall clock was the suspect and was measured first: raising it from
+120 ms to 250 ms changed nothing, and neither did two seconds, because the walk was not
+running out of time but stopping four levels into an empty corridor. Skipping unnamed
+containers costs about ten of the eighty elements on Chromium and leaves the budget
+meaning what it was written to mean — how far into *content* the read may reach — so a
+spreadsheet is no more exposed than it was before.
+
+A read that comes back with nothing but the window's own name no longer starts the
+thirty-second clock. Chromium builds its accessibility tree when a client first reaches
+into it and paints the page after the window exists, so the read taken the instant a tab
+opens is the one that finds nothing; holding that answer for half a minute meant the
+window was never read again while the user was on it.
 
 Redaction happens at write time rather than at read time because the alternative is a log
 that contains a secret and a promise that nobody will look. AD-14 already keeps a
@@ -697,6 +728,31 @@ missing line of context in one hour's summary.
 Both categories are switches in Settings, defaulting on. Turning one off stops it being
 read at all rather than filtering it afterwards, so there is no state in which the
 collector holds something the settings say it should not have.
+
+## AD-27: An application that leaves the foreground is asked about again
+
+**Decision.** The collector keeps one slot for the application the foreground has just
+left. `close_previous_application` asks about that slot as well as about the application
+now in front, and the two-second liveness timer therefore re-asks about a departure whose
+process was still exiting when it happened.
+
+**Why.** Closing a window hands the foreground on before the process has finished exiting.
+The liveness check made at that moment can still answer "running", and the pid was then
+overwritten by the application that took the foreground — so nothing ever asked about it
+again and no `applicationTerminated` was ever reported. The timer existed precisely to
+notice an exit by asking rather than by waiting to be told, but the thing it was asking
+about had already been forgotten.
+
+This was a live race, not a theoretical one, and it surfaced as a two-in-three failure of
+`records_a_real_application_switch` the moment the visible-text read in AD-24 got deeper
+and shifted the timing by a few tens of milliseconds. The test had passed for months
+against the same defect. A race that only one side of a timing change can see is worth
+removing rather than tuning: one slot for the most recent departure is enough, because it
+is the application the user just left.
+
+**Consequence.** A termination is reported up to two seconds after it happened rather than
+at the foreground change, which is far below the five-minute gap that ends an episode, so
+nothing downstream can tell the difference.
 
 ## AD-25: A saved day is a document, and the only thing the application will not delete
 

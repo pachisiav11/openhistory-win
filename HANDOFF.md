@@ -1,8 +1,60 @@
 # Handoff — OpenHistory for Windows
 
-Last updated 2026-08-23, after the launch-hang fix, the sign-in setting, the consent
-fix, and the day's screen-time and search-to-hour work. Read this before touching
-anything.
+Last updated 2026-08-24, after the document-label fix, the Chromium capture fix and the
+termination race. Read this before touching anything, and read the next section first.
+
+## Stopping point, 2026-08-24
+
+`main` carries the five items the previous session left open, four of them resolved and
+one deliberately not. Everything below was run and passed on this tree:
+`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace` (298 passed, 11 ignored), `npx tsc --noEmit`, `npm test`
+(76 passed), `npm run build`, and both ignored desktop gates — `live_desktop` (now 6) and
+`persistence` (3).
+
+**What changed.**
+
+1. **A document named after its editor is no longer recorded.**
+   `DocumentObservation::names_the_window` takes a path outright and otherwise requires
+   the trimmed title to be at least three characters and to appear inside the window
+   title, compared without case. `Collector::read_window` takes the title and drops a
+   document that fails it. Notepad wrote `"document":{"title":"Text editor"}` before this.
+2. **The visible-text read was never a budget problem, and the budget is unchanged at
+   120 ms.** It was measured: 120 ms, 250 ms and 2 s all returned one line from a Chrome
+   window, so time was not the constraint. The depth cap counted every level of the tree,
+   and Chromium hangs its page ten or eleven levels down behind a spine of seven unnamed
+   `Pane` elements — the walk stopped four levels into an empty corridor. The walk now
+   charges only levels that named something, and a read that comes back with nothing but
+   the window's own name no longer starts the thirty-second clock. Verified live: a Claude
+   (Electron) window went from `["Claude"]` to twelve lines, and `winver` now reads its
+   actual dialog text. See AD-24.
+3. **An application that exits while handing the foreground on is now reported.** The
+   collector parks the departing application in one slot so the two-second liveness timer
+   re-asks about it. This race pre-dated the session and had been passing by luck; the
+   deeper read in item 2 shifted the timing and it began failing two runs in three. See
+   AD-27.
+4. `HANDOFF.md` and `docs/ARCHITECTURE.md` are committed.
+5. `todo.md` is empty by design. Everything is in `TODO_log.md`.
+
+**Still open, and the reason.**
+
+- **The commit message of `6e52875` still has a stray `@` as its first line**, so the real
+  subject is on line 2. Fixing it means `commit --amend` and a force-push to `main`, which
+  the standing constraints say needs explicit instruction. The user has been told and has
+  not asked for it. **Use `git commit -F -` with a bash heredoc, or the PowerShell tool,
+  but never mix the two.**
+- **The visible-text read is dominated by window furniture.** A Chrome window now yields
+  `["… - Google Chrome", "Minimize", "Maximize", "Close", "New Tab", "Back", "Forward",
+  "Reload", "You", "Chrome", "Tab search", "File"]` — twelve lines, of which perhaps four
+  are worth summarizing, and the page's own text is not among them. Breadth-first order
+  reaches the frame before the content. Worth trying: skip control types that are pure
+  frame, or prefer `Text` and `Document` elements when the line budget is contended. The
+  browser gate will show the result immediately.
+- **A browser page's text is still read before the page has loaded.** The read happens on
+  the window-change event; the title change that follows the page load is inside the
+  thirty-second interval, so the loaded page is never read. Keying the interval on the
+  window title rather than only on the window would fix it, with a short floor to protect
+  against the video player that retitles every second (see `VISIBLE_TEXT_INTERVAL`).
 
 ## Where the project stands
 
@@ -80,7 +132,7 @@ Everything below was run and passed:
 
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
-- `cargo test --workspace` — 297 passed, 0 failed, 10 ignored.
+- `cargo test --workspace` — 298 passed, 0 failed, 11 ignored.
 - `npm test` — 76 passed.
 - `npm run build` and `npx tsc --noEmit` — clean.
 - The golden path driven in the browser preview: choose a model, store a key, give
@@ -126,12 +178,28 @@ in a row, that is new and worth reading properly.
   `describe` now refuses our own windows, and the collector releases its caller before
   taking the snapshot. See AD-19.
 
-- **A UIAutomation walk is a cross-process call per step.** Reading the text a window is
-  showing has to be bounded by breadth *and* depth, not just by how much text is kept, or
-  a large document view costs more than the interval between window switches and the
-  collector starts measuring its own latency. `uia::visible_text` stops at 80 elements,
-  4 levels, 24 children per node, and reads a given window at most once every thirty
-  seconds. See AD-24.
+- **A UIAutomation walk is a cross-process call per step, and `FindAll` with
+  `TreeScope_Descendants` is a whole-tree search inside the other process.** No element
+  cap applies until after it returns, so it is not a bounded read at all. Using one to
+  find the document element made `records_a_real_application_switch` time out at twelve
+  seconds where it had passed in two: the collector was still reading one window when the
+  next foreground change arrived, and a termination is only noticed at a foreground
+  change. `uia::read_window` is now one breadth-first walk that finds the document and
+  the text together, bounded by 80 elements, 4 levels, 24 children per node, and a 120 ms
+  clock, reading a given window's text at most once every thirty seconds. Run the ignored
+  desktop gate after touching anything the collector does per window — no unit test can
+  see this. See AD-24.
+- **A bounded walk can be bounded in the wrong dimension.** The visible-text read looked
+  like a latency problem for a whole session — it returned one line from Chromium windows
+  and the wall clock was the obvious suspect. It was not: 120 ms, 250 ms and 2 s all give
+  the same one line. Measure which budget is actually running out before changing one.
+  `FindAll(TreeScope_Children)` on a Chrome window returns two children; the page is ten
+  or eleven levels below, behind unnamed panes.
+- **A live gate that has always passed is not evidence that the code has no race.**
+  `records_a_real_application_switch` passed for months over a termination race that a few
+  tens of milliseconds of extra work in an unrelated read exposed immediately. When a
+  desktop gate starts failing after a change that should not touch it, suspect a race the
+  change merely revealed, and fix the race rather than restoring the old timing.
 - **Redaction that only guards the network does not guard the disk.** `oh-collector/src/
   text.rs` runs before anything is written, not before anything is sent. It is
   deliberately eager — a twenty-character run of mixed letters and digits is dropped

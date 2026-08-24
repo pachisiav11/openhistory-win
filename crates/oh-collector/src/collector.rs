@@ -125,6 +125,15 @@ struct CollectorState {
     /// When the visible text was last read, and for which window. A different window
     /// is read at once; the same one waits for the interval.
     last_text_read: Option<(isize, std::time::Instant)>,
+    /// An application the foreground has left that was still running when it went.
+    ///
+    /// Closing a window hands the foreground on before the process has finished
+    /// exiting, so the liveness check made at that moment can still say "running".
+    /// Without somewhere to put it the pid is overwritten by the application now in
+    /// front, and the exit is never noticed by anything. The liveness timer re-asks
+    /// about whatever is parked here. One slot is enough: it is the application the
+    /// user just left.
+    departed: Option<(u32, String)>,
 }
 
 impl CollectorState {
@@ -166,8 +175,19 @@ impl CollectorState {
             .with_accessibility_trusted(self.automation.is_some())
     }
 
-    /// Report that the previously recorded application has exited.
+    /// Report that a recorded application has exited.
+    ///
+    /// Both the application in front and the one the foreground last left are asked
+    /// about, because an application is usually still exiting at the moment it hands
+    /// the foreground on.
     fn close_previous_application(&mut self) {
+        if let Some((pid, name)) = self.departed.clone()
+            && !win::process_is_alive(pid)
+        {
+            self.departed = None;
+            self.emit_termination(pid, name);
+        }
+
         let (Some(pid), Some(name)) = (self.last_pid, self.last_app_name.clone()) else {
             return;
         };
@@ -175,6 +195,14 @@ impl CollectorState {
             return;
         }
 
+        self.emit_termination(pid, name);
+        self.last_pid = None;
+        self.last_app_name = None;
+        self.last_title = None;
+        self.last_url = None;
+    }
+
+    fn emit_termination(&self, pid: u32, name: String) {
         self.emit(
             ActivityEvent::new(EventKind::ApplicationTerminated).with_application(
                 ApplicationDescriptor {
@@ -185,10 +213,6 @@ impl CollectorState {
                 },
             ),
         );
-        self.last_pid = None;
-        self.last_app_name = None;
-        self.last_title = None;
-        self.last_url = None;
     }
 
     /// Decide how much of a window may be recorded.
@@ -231,6 +255,11 @@ impl CollectorState {
             return;
         }
 
+        if let (Some(previous), Some(name)) = (self.last_pid, self.last_app_name.clone())
+            && previous != application.pid
+        {
+            self.departed = Some((previous, name));
+        }
         self.last_pid = Some(application.pid);
         self.last_app_name = Some(application.name.clone());
         self.report_window(
@@ -308,7 +337,7 @@ impl CollectorState {
             if let Some(title) = title.clone() {
                 event = event.with_window_title(title);
             }
-            let (document, lines) = self.read_window(hwnd);
+            let (document, lines) = self.read_window(hwnd, title.as_deref());
             if let Some(document) = document {
                 event = event.with_document(document);
             }
@@ -331,7 +360,16 @@ impl CollectorState {
     /// answer: repeating an observation would say it was seen twice, which is not what
     /// happened. The document is read on every window change, since that is what
     /// changed.
-    fn read_window(&mut self, hwnd: HWND) -> (Option<DocumentObservation>, Vec<String>) {
+    ///
+    /// The window title is what the document is checked against: an application that
+    /// answers with the name of its editing control rather than the open file would
+    /// otherwise be recorded as a document called "Text editor". See
+    /// `DocumentObservation::names_the_window`.
+    fn read_window(
+        &mut self,
+        hwnd: HWND,
+        window_title: Option<&str>,
+    ) -> (Option<DocumentObservation>, Vec<String>) {
         let Some(automation) = self.automation.as_ref() else {
             return (None, Vec::new());
         };
@@ -344,13 +382,21 @@ impl CollectorState {
 
         let want_text = self.config.capture_visible_text && due;
         let reading = automation.read_window(hwnd, self.config.capture_documents, want_text);
-        if want_text {
+
+        // A read that came back with nothing but the window's own name did not observe
+        // the window, so it must not start the clock that suppresses the next one.
+        // Chromium and Electron build their accessibility tree the first time a client
+        // reaches into it, and paint the page after the window already exists; the read
+        // taken the instant a tab opens is always that read. Holding it for half a
+        // minute is what turned a window full of text into `["Claude"]`. Leaving the
+        // clock unset lets the title change that follows a page load try again.
+        if want_text && reading.lines.len() > 1 {
             self.last_text_read = Some((window, now));
         }
 
         let document = reading.document.and_then(|(path, title)| {
             let document = DocumentObservation { path, title };
-            (!document.is_empty()).then_some(document)
+            (!document.is_empty() && document.names_the_window(window_title)).then_some(document)
         });
         (document, reading.lines)
     }
@@ -604,6 +650,7 @@ fn collector_thread(
             last_title: None,
             last_url: None,
             last_text_read: None,
+            departed: None,
         });
     });
 
@@ -770,6 +817,7 @@ mod tests {
             last_title: None,
             last_url: None,
             last_text_read: None,
+            departed: None,
         }
     }
 

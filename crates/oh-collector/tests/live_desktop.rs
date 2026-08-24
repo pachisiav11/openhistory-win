@@ -50,12 +50,14 @@ fn describe(seen: &[ActivityEvent]) -> String {
     seen.iter()
         .map(|e| {
             format!(
-                "  {:?} {}",
+                "  {:?} {} | title {:?} | text {:?}",
                 e.kind,
                 e.application
                     .as_ref()
                     .map(|a| a.name.as_str())
-                    .unwrap_or("-")
+                    .unwrap_or("-"),
+                e.window_title.as_deref().unwrap_or("-"),
+                e.visible_text.as_deref().unwrap_or(&[])
             )
         })
         .collect::<Vec<_>>()
@@ -409,4 +411,103 @@ fn reads_what_a_real_window_is_showing() {
     child.kill().expect("charmap must be killable");
     let _ = child.wait();
     collector.stop();
+}
+
+/// An ordinary Chromium window must yield more than its own name.
+///
+/// `charmap.exe` is a plain Win32 window whose whole interface is in the accessibility
+/// tree before anyone asks for it. A Chromium window is not: the tree is built on
+/// demand when a UIA client first reaches in, and the first read pays for waking it.
+/// The installed build read `["Claude"]` and `["Notepad"]` from windows full of text
+/// for exactly this reason, and no unit test could see it. A throwaway profile keeps
+/// this out of the user's own browser session.
+#[test]
+#[ignore = "opens a real browser window and needs an interactive desktop"]
+fn a_chromium_window_yields_more_than_its_own_name() {
+    const PROBE_TITLE: &str = "OpenHistory Capture Probe";
+    const PROBE_PAGE: &str = concat!(
+        "<!doctype html><title>OpenHistory Capture Probe</title>",
+        "<h1>Quarterly planning notes</h1>",
+        "<p>The renewal deadline is the fourteenth.</p>",
+        "<p>Ask the design team about the onboarding flow.</p>",
+    );
+
+    let Some(browser) = installed_browsers().into_iter().next() else {
+        panic!("no Chromium browser is installed to test against");
+    };
+    let label = browser
+        .exe
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    // Chromium refuses a top-level `data:` navigation, so the page has to be a file.
+    let page = tempfile::tempdir().expect("temp page dir");
+    let path = page.path().join("capture-probe.html");
+    std::fs::write(&path, PROBE_PAGE).expect("probe page must be written");
+    let profile = tempfile::tempdir().expect("temp profile dir");
+
+    let (tx, events) = mpsc::channel();
+    let collector = start_collector(
+        Box::new(move |event| {
+            let _ = tx.send(event);
+        }),
+        CollectorConfig::default(),
+    )
+    .expect("collector must start");
+
+    let mut seen = Vec::new();
+    wait_for(&events, &mut seen, |e| {
+        e.kind == EventKind::CollectorStarted
+    })
+    .expect("collectorStarted must be the first thing reported");
+
+    let mut child = std::process::Command::new(&browser.exe)
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg(format!("--user-data-dir={}", profile.path().display()))
+        .arg(&path)
+        .spawn()
+        .unwrap_or_else(|e| panic!("{label} must launch: {e}"));
+
+    // The user may already have this browser open on something else, so the window we
+    // launched has to be told apart from the one they were using. The probe page names
+    // itself in both places a window can say what it is on, and which of the two is
+    // current depends on whether the page had finished loading when the read happened.
+    let names_the_probe = |text: &str| text.contains(PROBE_TITLE);
+    let observed = wait_for(&events, &mut seen, |e| {
+        let titled = e.window_title.as_deref().is_some_and(names_the_probe);
+        let shown = e
+            .visible_text
+            .as_ref()
+            .is_some_and(|lines| lines.iter().any(|line| names_the_probe(line)));
+        (titled || shown)
+            && e.visible_text
+                .as_ref()
+                .is_some_and(|lines| !lines.is_empty())
+    });
+
+    // Shut the browser down before asserting, so a failed expectation never leaves a
+    // stray window on the desktop. Chromium spawns helpers, so the whole tree has to go.
+    let _ = std::process::Command::new("taskkill.exe")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .output();
+    let _ = child.wait();
+    collector.stop();
+
+    let observed = observed.unwrap_or_else(|| {
+        panic!(
+            "no window observation carrying visible text for the probe page. Saw:\n{}",
+            describe(&seen)
+        )
+    });
+    let lines = observed.visible_text.as_ref().unwrap();
+    println!("{label} showed: {lines:?}");
+
+    assert!(
+        lines.len() > 1,
+        "{label} yielded only its own name: {lines:?}. The read budget is being spent \
+         waking the accessibility tree rather than reading it."
+    );
 }

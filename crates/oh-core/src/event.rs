@@ -148,6 +148,33 @@ impl DocumentObservation {
         (!name.is_empty()).then(|| name.to_owned())
     }
 
+    /// Whether this observation names a document rather than the editor showing it.
+    ///
+    /// An accessibility tree offers no way to ask "is this a file?". A document element
+    /// answers `CurrentName` with whatever the application put there, and several put
+    /// the name of the control: a real Notepad window on `capture-probe.txt` reports
+    /// "Text editor". Recording that would claim the user opened a document by that
+    /// name, which is worse than recording nothing.
+    ///
+    /// A path is self-evidently a document, so it always passes. A bare title has to
+    /// earn it by appearing in the window title, which is the one other place the
+    /// application states what it is on. Two characters are too weak a coincidence to
+    /// count as agreement.
+    pub fn names_the_window(&self, window_title: Option<&str>) -> bool {
+        if self.path.is_some() {
+            return true;
+        }
+        let Some(title) = self.title.as_ref().map(|t| t.trim()) else {
+            return false;
+        };
+        if title.chars().count() < 3 {
+            return false;
+        }
+        window_title
+            .map(str::trim)
+            .is_some_and(|window| window.to_lowercase().contains(&title.to_lowercase()))
+    }
+
     pub fn is_empty(&self) -> bool {
         self.path.is_none() && self.title.is_none()
     }
@@ -410,6 +437,50 @@ mod tests {
         };
         assert_eq!(nothing.label(), None);
         assert!(nothing.is_empty());
+    }
+
+    #[test]
+    fn a_document_named_after_its_editor_is_not_a_document() {
+        let control = DocumentObservation {
+            path: None,
+            title: Some("Text editor".into()),
+        };
+        assert!(!control.names_the_window(Some("capture-probe.txt - Notepad")));
+
+        let real = DocumentObservation {
+            path: None,
+            title: Some("capture-probe.txt".into()),
+        };
+        assert!(real.names_the_window(Some("capture-probe.txt - Notepad")));
+
+        // Applications disagree about capitalization between the two places they
+        // state the same file, and that disagreement is not evidence of anything.
+        let cased = DocumentObservation {
+            path: None,
+            title: Some("Budget 2026.xlsx".into()),
+        };
+        assert!(cased.names_the_window(Some("budget 2026.xlsx - Excel")));
+
+        // A path is a document whatever the window is called.
+        let located = DocumentObservation {
+            path: Some(r"C:\work\notes.md".into()),
+            title: Some("Text editor".into()),
+        };
+        assert!(located.names_the_window(Some("Untitled - Notepad")));
+        assert!(located.names_the_window(None));
+
+        // Two characters agree with too much to mean anything.
+        let short = DocumentObservation {
+            path: None,
+            title: Some("Do".into()),
+        };
+        assert!(!short.names_the_window(Some("Documents - File Explorer")));
+
+        let unknown = DocumentObservation {
+            path: None,
+            title: Some("capture-probe.txt".into()),
+        };
+        assert!(!unknown.names_the_window(None));
     }
 
     #[test]

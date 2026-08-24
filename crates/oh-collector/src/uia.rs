@@ -42,13 +42,16 @@ const MAX_WINDOW_CHILDREN: i32 = 8;
 /// How many elements a visible-text read may look at.
 ///
 /// Every step is a cross-process call, so this is a time budget as much as a size
-/// one. Eighty elements over four levels reaches the tab strip, the headings and the
-/// name of the thing being edited, which is what makes a summary specific; going
-/// deeper reaches the body of the document, which is not this application's business
-/// and would cost noticeable time on every window change.
+/// one. Eighty elements reaches the tab strip, the headings and the name of the thing
+/// being edited, which is what makes a summary specific; going further reaches the
+/// body of the document, which is not this application's business and would cost
+/// noticeable time on every window change.
 const MAX_TEXT_ELEMENTS: usize = 80;
 
-/// How far down the tree a visible-text read may go.
+/// How many *named* levels of the tree a visible-text read may go down.
+///
+/// Unnamed containers are not counted; see the walk in `read_window`. Four levels of
+/// content is the tab strip, a heading and the document's name — not its body.
 const MAX_TEXT_DEPTH: u32 = 4;
 
 /// How many children of any one element a visible-text read may queue.
@@ -221,6 +224,15 @@ impl Automation {
                 }
             }
 
+            // An element that said nothing is scaffolding rather than a level of
+            // content, and must not be charged to the depth budget. Chromium hangs a
+            // page under seven or more unnamed panes: counting those spent the whole
+            // budget on empty containers and returned nothing but the window's own
+            // name from windows full of text. Only a level that named something
+            // counts as a level, so the budget still limits how far into real content
+            // the read reaches — which is what it was there to do.
+            let named = name.as_deref().is_some_and(|name| !name.trim().is_empty());
+
             if want_text
                 && let Some(name) = name
                 && !name.trim().is_empty()
@@ -231,6 +243,7 @@ impl Automation {
             if depth >= MAX_TEXT_DEPTH {
                 continue;
             }
+            let child_depth = if named { depth + 1 } else { depth };
             let Ok(children) = (unsafe { element.FindAll(TreeScope_Children, &condition) }) else {
                 continue;
             };
@@ -239,7 +252,7 @@ impl Automation {
                 .min(MAX_TEXT_CHILDREN);
             for i in 0..count {
                 if let Ok(child) = unsafe { children.GetElement(i) } {
-                    queue.push_back((child, depth + 1));
+                    queue.push_back((child, child_depth));
                 }
             }
         }
