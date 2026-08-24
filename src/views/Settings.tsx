@@ -30,6 +30,8 @@ import {
   stopMcp,
   storeApiKey,
   useCloudModel,
+  chooseLocalServer,
+  forgetLocalServer,
   useLocalModel,
   type CloudModel,
   type Config,
@@ -47,9 +49,12 @@ interface Props {
   onChanged: () => void;
 }
 
-/** The value of the model dropdown when nothing hosted is chosen. */
-const DISABLED = "disabled";
-const LOCAL_PREFIX = "local:";
+/**
+ * Where summaries are written. The stored provider is finer than this — there are
+ * three cloud vendors — but the question being answered here is which of the three
+ * places, and which vendor is the next question rather than this one.
+ */
+type Where = "off" | "local" | "cloud";
 
 function megabytes(bytes: number): string {
   const gb = bytes / 1_000_000_000;
@@ -162,27 +167,44 @@ export default function Settings({ onChanged }: Props) {
   }
 
   const provider = config.inference.provider;
-  const selection =
-    provider === "local"
-      ? `${LOCAL_PREFIX}${config.inference.localModelId ?? ""}`
-      : provider === "disabled"
-        ? DISABLED
-        : config.inference.cloudModel;
+  const where: Where =
+    provider === "disabled" ? "off" : provider === "local" ? "local" : "cloud";
 
   const chosen = cloud.find((one) => one.id === config.inference.cloudModel);
-  const needsKey = provider !== "disabled" && provider !== "local" && chosen && !chosen.hasKey;
+  const needsKey = where === "cloud" && chosen && !chosen.hasKey;
+  const installed = models.filter((one) => one.installed);
 
-  const chooseModel = (value: string) => {
-    if (value === DISABLED) {
-      save((current) => ({
-        ...current,
-        inference: { ...current.inference, provider: "disabled" },
-      }));
-    } else if (value.startsWith(LOCAL_PREFIX)) {
-      act(() => useLocalModel(value.slice(LOCAL_PREFIX.length)));
-    } else {
-      act(() => useCloudModel(value));
+  const turnOff = () =>
+    save((current) => ({
+      ...current,
+      inference: { ...current.inference, provider: "disabled" },
+    }));
+
+  // Choosing where summaries are written is not the same as choosing which model
+  // writes them, and the two used to be one dropdown. Moving to a place that has no
+  // model chosen yet takes the first one available, because a choice that leaves the
+  // application unable to do the thing just asked of it is not a choice.
+  const chooseWhere = (next: Where) => {
+    if (next === where) return;
+    if (next === "off") {
+      turnOff();
+      return;
     }
+    if (next === "local") {
+      const target = config.inference.localModelId ?? installed[0]?.id;
+      // With nothing downloaded there is no model to name, and refusing the choice
+      // would leave the radio ignoring clicks with no explanation. Move anyway: the
+      // panel then says what to download.
+      if (target) act(() => useLocalModel(target));
+      else
+        save((current) => ({
+          ...current,
+          inference: { ...current.inference, provider: "local" },
+        }));
+      return;
+    }
+    const target = config.inference.cloudModel || cloud[0]?.id;
+    if (target) act(() => useCloudModel(target));
   };
 
   return (
@@ -347,41 +369,125 @@ export default function Settings({ onChanged }: Props) {
       <section className="panel" aria-label="Summaries">
         <h3 className="panel__title">Summaries</h3>
 
-        <label className="field">
-          <span className="field__label">Model</span>
-          <select
-            className="input"
-            value={selection}
-            disabled={busy}
-            onChange={(event) => chooseModel(event.target.value)}
-          >
-            <option value={DISABLED}>No summaries</option>
-            {byVendor.map(([vendor, entries]) => (
-              <optgroup key={vendor} label={vendor}>
-                {entries.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name}
-                    {model.hasKey ? "" : " — needs a key"}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-            {models.some((one) => one.installed) ? (
-              <optgroup label="On this machine">
-                {models
-                  .filter((one) => one.installed)
-                  .map((one) => (
-                    <option key={one.id} value={`${LOCAL_PREFIX}${one.id}`}>
-                      {one.name}
+        <fieldset className="choice" disabled={busy}>
+          <legend className="field__label">Where summaries are written</legend>
+          {(
+            [
+              ["off", "No summaries", "Nothing is summarized and nothing is sent."],
+              [
+                "local",
+                "On this machine",
+                "A model that runs here. Nothing leaves the machine.",
+              ],
+              [
+                "cloud",
+                "A cloud provider",
+                "A hosted model. Needs a key and your agreement.",
+              ],
+            ] as [Where, string, string][]
+          ).map(([value, label, hint]) => (
+            <label className="choice__option" key={value}>
+              <input
+                type="radio"
+                name="summaries-where"
+                value={value}
+                checked={where === value}
+                onChange={() => chooseWhere(value)}
+              />
+              <span className="choice__body">
+                <span className="choice__label">{label}</span>
+                <span className="field__hint">{hint}</span>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+
+        {where === "local" ? (
+          <label className="field">
+            <span className="field__label">Model on this machine</span>
+            <select
+              className="input"
+              value={config.inference.localModelId ?? ""}
+              disabled={busy || installed.length === 0}
+              onChange={(event) => act(() => useLocalModel(event.target.value))}
+            >
+              {config.inference.localModelId ? null : (
+                <option value="">Choose a model</option>
+              )}
+              {installed.map((one) => (
+                <option key={one.id} value={one.id}>
+                  {one.name}
+                </option>
+              ))}
+            </select>
+            <span className="field__hint">
+              {installed.length === 0
+                ? "No model is downloaded yet. Choose one from the list below and download it."
+                : "This model writes every summary until you change it."}
+            </span>
+          </label>
+) : null}
+
+        {where === "local" ? (
+          <div className="field">
+            <span className="field__label">llama-server</span>
+            <div className="key__row">
+              <input
+                className="input"
+                readOnly
+                value={config.inference.localServerPath ?? "Not found"}
+              />
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                onClick={() => act(() => chooseLocalServer())}
+              >
+                Find…
+              </button>
+              {config.inference.localServerPath ? (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy}
+                  onClick={() => act(() => forgetLocalServer())}
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+            <span className="field__hint">
+              A local model needs llama-server to run it, and this application does not
+              ship one. Download a llama.cpp release and point at the llama-server
+              program inside it. Leaving this clear looks beside the application and on
+              PATH.
+            </span>
+          </div>
+        ) : null}
+
+        {where === "cloud" ? (
+          <label className="field">
+            <span className="field__label">Cloud model</span>
+            <select
+              className="input"
+              value={config.inference.cloudModel}
+              disabled={busy}
+              onChange={(event) => act(() => useCloudModel(event.target.value))}
+            >
+              {byVendor.map(([vendor, entries]) => (
+                <optgroup key={vendor} label={vendor}>
+                  {entries.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.name}
+                      {model.hasKey ? "" : " — needs a key"}
                     </option>
                   ))}
-              </optgroup>
-            ) : null}
-          </select>
-          {chosen && provider !== "local" && provider !== "disabled" ? (
-            <span className="field__hint">{chosen.note}</span>
-          ) : null}
-        </label>
+                </optgroup>
+              ))}
+            </select>
+            {chosen ? <span className="field__hint">{chosen.note}</span> : null}
+          </label>
+        ) : null}
 
         <label className="field field--check">
           <input

@@ -43,6 +43,10 @@ one deliberately not. Everything below was run and passed on this tree:
   the standing constraints say needs explicit instruction. The user has been told and has
   not asked for it. **Use `git commit -F -` with a bash heredoc, or the PowerShell tool,
   but never mix the two.**
+- **Nothing ships `llama-server`, and local inference cannot work without it.** The user
+  now points at one in Settings and the path is stored as `inference.local_server_path`.
+  Bundling the binary, or offering to download a llama.cpp release the way the model
+  catalog already downloads GGUFs, is the obvious next step and was not taken here.
 - **The visible-text read is dominated by window furniture.** A Chrome window now yields
   `["… - Google Chrome", "Minimize", "Maximize", "Close", "New Tab", "Back", "Forward",
   "Reload", "You", "Chrome", "Tab search", "File"]` — twelve lines, of which perhaps four
@@ -133,6 +137,7 @@ Everything below was run and passed:
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
 - `cargo test --workspace` — 302 passed, 0 failed, 11 ignored.
+- `npm test` — 79 passed.
 - `npm test` — 76 passed.
 - `npm run build` and `npx tsc --noEmit` — clean.
 - The golden path driven in the browser preview: choose a model, store a key, give

@@ -183,13 +183,13 @@ impl InferenceService {
                         model,
                     };
                 }
-                if crate::llama::find_binary(None).is_none() {
+                if local_binary(inference).is_none() {
                     return Readiness {
                         provider,
                         ready: false,
                         blocked_by: Some(
-                            "llama-server was not found. Install llama.cpp and put llama-server \
-                             on PATH."
+                            "llama-server was not found. Point at it in Settings, or put it \
+                             beside the application or on PATH."
                                 .into(),
                         ),
                         model,
@@ -438,7 +438,7 @@ impl InferenceService {
                 })?;
 
                 let options = LlamaOptions {
-                    binary: crate::llama::find_binary(None),
+                    binary: local_binary(&config.inference),
                     context_size: config.inference.context_size,
                     idle_unload: std::time::Duration::from_secs(
                         config.inference.idle_unload_seconds,
@@ -460,6 +460,20 @@ impl InferenceService {
     fn cloud_base_url(&self) -> Option<String> {
         tests::base_url_override()
     }
+}
+
+/// Where `llama-server` is, if it can be found at all.
+///
+/// A path the user set wins over the search, and a path that is no longer a file is
+/// ignored rather than handed to the spawner, so a server that has been moved reads as
+/// missing here instead of as a failure to start later. Nothing ships the binary, so on
+/// most machines the search finds nothing and this setting is the only way local
+/// summaries can work at all.
+fn local_binary(inference: &oh_core::InferenceConfig) -> Option<std::path::PathBuf> {
+    if let Some(chosen) = inference.local_server_path.as_ref() {
+        return chosen.is_file().then(|| chosen.clone());
+    }
+    crate::llama::find_binary(None)
 }
 
 /// How long a cloud provider is given to answer.

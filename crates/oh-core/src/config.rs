@@ -269,6 +269,14 @@ pub struct InferenceConfig {
     /// hand-picked one alike, so the runtime only ever has to read this.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_model_path: Option<PathBuf>,
+    /// Full path to `llama-server`, when the user has pointed at one.
+    ///
+    /// Nothing ships the binary, so on most machines it is neither beside the
+    /// application nor on `PATH`, and a downloaded model is then unusable with no way
+    /// to say where the server lives. This is that way. `None` keeps the search that
+    /// was there before: beside the executable, then `PATH`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_server_path: Option<PathBuf>,
     /// Context window handed to `llama-server`.
     pub context_size: u32,
     pub idle_unload_seconds: u64,
@@ -284,6 +292,7 @@ impl Default for InferenceConfig {
             cloud_model: DEFAULT_CLOUD_MODEL.to_owned(),
             local_model_id: None,
             local_model_path: None,
+            local_server_path: None,
             context_size: 8192,
             idle_unload_seconds: DEFAULT_IDLE_UNLOAD_SECONDS,
             auto_summarize: false,

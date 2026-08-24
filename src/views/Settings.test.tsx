@@ -67,15 +67,32 @@ describe("Settings — summaries", () => {
     expect(saved[0]!.inference.provider).toBe("disabled");
   });
 
-  it("offers every model in one dropdown, grouped by who runs it", async () => {
+  it("asks where summaries are written before asking which model", async () => {
     backend();
+    mockCommand("cloud_models", sevenModels);
+    render(<Settings onChanged={() => {}} />);
+
+    expect(await screen.findByRole("radio", { name: /No summaries/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /On this machine/ })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /A cloud provider/ })).not.toBeChecked();
+
+    // Neither model list is on the page until a place has been chosen.
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("offers every cloud model grouped by who runs it, once the cloud is chosen", async () => {
+    backend({
+      config: config({
+        inference: { ...config().inference, provider: "anthropic" },
+      }),
+    });
     mockCommand("cloud_models", sevenModels);
     render(<Settings onChanged={() => {}} />);
 
     const dropdown = await screen.findByRole("combobox");
     const options = within(dropdown).getAllByRole("option");
-    // Seven models and the off switch.
-    expect(options).toHaveLength(8);
+    // The seven models, and no off switch: that is the radio's job now.
+    expect(options).toHaveLength(7);
     expect(options.map((one) => one.textContent)).toContain("Gemini Flash (latest) — needs a key");
 
     const groups = dropdown.querySelectorAll("optgroup");
@@ -86,8 +103,61 @@ describe("Settings — summaries", () => {
     ]);
   });
 
+  it("lets the user pick which downloaded model is the default", async () => {
+    backend({
+      config: config({
+        inference: { ...config().inference, provider: "local", localModelId: "one" },
+      }),
+    });
+    mockCommand("local_models", () => [
+      localModel({ id: "one", name: "Model One", installed: true }),
+      localModel({ id: "two", name: "Model Two", installed: true }),
+      localModel({ id: "three", name: "Model Three", installed: false }),
+    ]);
+    const chosen: string[] = [];
+    mockCommand("use_local_model", (args): Config => {
+      chosen.push(String(args?.id));
+      return config({
+        inference: {
+          ...config().inference,
+          provider: "local",
+          localModelId: String(args?.id),
+        },
+      });
+    });
+    render(<Settings onChanged={() => {}} />);
+
+    const dropdown = await screen.findByRole("combobox");
+    // Only what is on disk can be the default.
+    expect(within(dropdown).getAllByRole("option").map((one) => one.textContent)).toEqual([
+      "Model One",
+      "Model Two",
+    ]);
+
+    await userEvent.setup().selectOptions(dropdown, "two");
+    await waitFor(() => expect(chosen).toEqual(["two"]));
+  });
+
+  it("says where llama-server is, and that nothing ships one", async () => {
+    backend({
+      config: config({
+        inference: { ...config().inference, provider: "local", localModelId: "one" },
+      }),
+    });
+    mockCommand("local_models", () => [localModel({ id: "one", installed: true })]);
+    render(<Settings onChanged={() => {}} />);
+
+    expect(await screen.findByDisplayValue("Not found")).toBeInTheDocument();
+    expect(screen.getByText(/does not\s+ship one/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Find/ })).toBeEnabled();
+  });
+
   it("sets the provider from the model, not from a second dropdown", async () => {
-    backend();
+    backend({
+      config: config({
+        inference: { ...config().inference, provider: "anthropic" },
+      }),
+    });
     mockCommand("cloud_models", sevenModels);
     const chosen: string[] = [];
     mockCommand("use_cloud_model", (args): Config => {
@@ -126,7 +196,7 @@ describe("Settings — summaries", () => {
     backend();
     render(<Settings onChanged={() => {}} />);
 
-    await screen.findByRole("combobox");
+    await screen.findByRole("radio", { name: /No summaries/ });
     expect(screen.getByRole("checkbox", { name: /I agree to send a reduced description/ })).toBeEnabled();
     expect(screen.getByText(/a cloud provider/)).toBeInTheDocument();
     expect(screen.getByText(/Nothing is sent while the model above is/)).toBeInTheDocument();

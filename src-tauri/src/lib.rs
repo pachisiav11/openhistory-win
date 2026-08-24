@@ -427,6 +427,8 @@ pub fn run() {
             summaries::cancel_download,
             summaries::remove_model,
             summaries::use_local_model,
+            summaries::choose_local_server,
+            summaries::forget_local_server,
             summaries::store_api_key,
             summaries::api_keys,
             summaries::forget_api_key,

@@ -469,6 +469,16 @@ export function installBrowserMocks(): void {
     return config;
   });
 
+  // A browser tab has no file dialog, and pretending one was dismissed is the honest
+  // answer rather than inventing a path that does not exist on this machine.
+  mockCommand("choose_local_server", (): Config | null => null);
+
+  mockCommand("forget_local_server", (): Config => {
+    const { localServerPath: _dropped, ...rest } = config.inference;
+    config = { ...config, inference: rest };
+    return config;
+  });
+
   mockCommand("inference_readiness", (): Readiness => {
     const { provider, cloudConsent, cloudModel, localModelId } = config.inference;
     if (provider === "disabled") {

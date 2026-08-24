@@ -789,6 +789,39 @@ The pauses are compiled out under `cfg(test)`. Tests assert what is retried and 
 times, never how long the pause was, and sleeping would cost every test that exercises a
 failure.
 
+## AD-29: Where a summary is written is a separate question from which model writes it
+
+**Decision.** Settings asks first where summaries are written — nowhere, on this machine,
+or a cloud provider — as three radio buttons, and only then which model. The place is the
+question the user is answering; the vendor follows from it. AD-5's "one dropdown" applies
+within the cloud, where the vendor really is a consequence of the model, and no longer
+across the three places.
+
+Alongside it, `inference.local_server_path` records where `llama-server` is, chosen
+through a file dialog.
+
+**Why.** The one-dropdown design put "No summaries", seven hosted models and any
+downloaded ones in a single list. Reading it, the difference that matters most — whether
+anything leaves the machine — was the difference between two adjacent `optgroup`s. A
+person looking for local inference had to know to scroll past three cloud vendors to find
+it, and the local models only appeared at all once something had been downloaded, so on a
+fresh install the option was invisible.
+
+The binary is the other half. Nothing ships `llama-server`, so `find_binary` looks beside
+the executable and then on `PATH`, finds nothing on an ordinary machine, and readiness
+said to put it on `PATH` — a sentence that asks the user to change their environment for
+one application. A downloaded 3 GB model was unusable with no way to say where the server
+lived. Now there is one.
+
+**Consequence.** Choosing "On this machine" with nothing downloaded still moves the radio
+and then explains what to download, rather than refusing the click. A choice that silently
+does nothing is worse than a choice that admits it is not finished, and the first version
+of this did exactly that.
+
+A path that has been moved or deleted reads as missing rather than being handed to the
+spawner, so the failure is reported where it can be acted on instead of as a server that
+would not start.
+
 ## AD-25: A saved day is a document, and the only thing the application will not delete
 
 **Decision.** The Summary view composes a day — its written summary, where the time went,

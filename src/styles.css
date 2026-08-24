@@ -635,6 +635,47 @@ body {
   accent-color: var(--accent);
 }
 
+.choice {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.choice:disabled {
+  opacity: 0.6;
+}
+
+.choice legend {
+  padding: 0 6px;
+}
+
+.choice__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.choice__option input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.choice__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.choice__label {
+  font-size: 0.82rem;
+  font-weight: 550;
+}
+
 .field__label {
   font-size: 0.78rem;
   font-weight: 550;

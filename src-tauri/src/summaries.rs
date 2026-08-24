@@ -19,6 +19,7 @@ use oh_processing::DayReport;
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::{AppState, parse_date, to_message};
 
@@ -224,6 +225,45 @@ pub fn use_local_model(id: String, app: State<'_, AppState>) -> Result<Config, S
     let mut config = app.config();
     resolve_local_model(&mut config, Some(&id))?;
     app.apply(config.clone())?;
+    Ok(config)
+}
+
+/// Ask the user where `llama-server` is, and remember the answer.
+///
+/// Returns the settings as they now stand, or `None` when the dialog was dismissed.
+/// Nothing ships the binary, so on most machines it is neither beside the application
+/// nor on `PATH`; without this a downloaded model cannot be used at all.
+#[tauri::command]
+pub fn choose_local_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<Config>, String> {
+    let mut picker = app.dialog().file().set_title("Find llama-server");
+    if cfg!(windows) {
+        picker = picker.add_filter("Programs", &["exe"]);
+    }
+    let Some(chosen) = picker.blocking_pick_file() else {
+        return Ok(None);
+    };
+    let path = chosen
+        .into_path()
+        .map_err(|error| format!("that file cannot be read: {error}"))?;
+    if !path.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+
+    let mut config = state.config();
+    config.inference.local_server_path = Some(path);
+    state.apply(config.clone())?;
+    Ok(Some(config))
+}
+
+/// Go back to looking beside the application and on `PATH`.
+#[tauri::command]
+pub fn forget_local_server(state: State<'_, AppState>) -> Result<Config, String> {
+    let mut config = state.config();
+    config.inference.local_server_path = None;
+    state.apply(config.clone())?;
     Ok(config)
 }
 

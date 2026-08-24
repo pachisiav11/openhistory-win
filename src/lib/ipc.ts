@@ -117,6 +117,8 @@ export interface InferenceConfig {
   cloudModel: string;
   localModelId?: string;
   localModelPath?: string;
+  /** Where llama-server is, when the user has pointed at one. */
+  localServerPath?: string;
   contextSize: number;
   idleUnloadSeconds: number;
   autoSummarize: boolean;
@@ -363,6 +365,8 @@ export const downloadModel = (id: string) => invoke<LocalModel>("download_model"
 export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
 export const removeModel = (id: string) => invoke<LocalModel>("remove_model", { id });
 export const useLocalModel = (id: string) => invoke<Config>("use_local_model", { id });
+export const chooseLocalServer = () => invoke<Config | null>("choose_local_server");
+export const forgetLocalServer = () => invoke<Config>("forget_local_server");
 
 export const apiKeys = () => invoke<KeyStatus[]>("api_keys");
 export const storeApiKey = (provider: InferenceProvider, key: string) =>
