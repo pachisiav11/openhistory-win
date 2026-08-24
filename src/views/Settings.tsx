@@ -395,15 +395,19 @@ export default function Settings({ onChanged }: Props) {
             }
           />
           <span>
-            Send a reduced description of each day to{" "}
-            {provider !== "disabled" && provider !== "local" && chosen
-              ? chosen.vendor
-              : "a cloud provider"}
-            . That description carries application names, window titles, the names of the
+            <strong>
+              I agree to send a reduced description of each day to{" "}
+              {provider !== "disabled" && provider !== "local" && chosen
+                ? chosen.vendor
+                : "a cloud provider"}
+              .
+            </strong>{" "}
+            That description carries application names, window titles, the names of the
             documents you were on and a few lines of the text those windows were showing.
             Private sessions become an application and a span of time, addresses lose their
             query strings, and no file path ever leaves this machine. Nothing is sent while the
-            model above is “No summaries” or one on this machine.
+            model above is “No summaries” or one on this machine. Leave this unchecked
+            and nothing about your day ever leaves it.
           </span>
         </label>
 

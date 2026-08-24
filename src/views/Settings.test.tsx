@@ -58,7 +58,7 @@ describe("Settings — summaries", () => {
     mockCommand("cloud_models", sevenModels);
     render(<Settings onChanged={() => {}} />);
 
-    const agree = await screen.findByRole("checkbox", { name: /Send a reduced description/ });
+    const agree = await screen.findByRole("checkbox", { name: /I agree to send a reduced description/ });
     expect(agree).not.toBeChecked();
     fireEvent.click(agree);
 
@@ -127,7 +127,7 @@ describe("Settings — summaries", () => {
     render(<Settings onChanged={() => {}} />);
 
     await screen.findByRole("combobox");
-    expect(screen.getByRole("checkbox", { name: /Send a reduced description/ })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: /I agree to send a reduced description/ })).toBeEnabled();
     expect(screen.getByText(/a cloud provider/)).toBeInTheDocument();
     expect(screen.getByText(/Nothing is sent while the model above is/)).toBeInTheDocument();
   });
