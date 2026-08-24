@@ -754,6 +754,41 @@ is the application the user just left.
 at the foreground change, which is far below the five-minute gap that ends an episode, so
 nothing downstream can tell the difference.
 
+## AD-28: A summary is retried when the reason it failed might not last
+
+**Decision.** `InferenceService::generate` sends a prompt up to three times, pausing two
+seconds and then four between attempts. Only failures `InferenceError::is_transient`
+already recognised — a 429, a 5xx, a dropped connection, a timeout — are retried; a
+missing key, a refused prompt or a 400 is reported on the first answer. Google is given
+120 seconds to answer where Anthropic and OpenAI are given 60.
+
+**Why.** The flag existed and nothing read it. `is_transient` was written to tell a blip
+apart from a wall, was covered by its own tests, and no caller ever asked. A single slow
+answer from Google therefore ended a whole day's run with "google did not answer within
+60s" — and because `summarize_day` stops at the first failure, one blip in the ninth hour
+threw away the rest of the day.
+
+The timeout is per-provider because the providers are not asked for the same work.
+`google.rs` adds 4,000 tokens of `maxOutputTokens` headroom that neither of the others is
+given, because Gemini reasons before it answers and that reasoning is generated on the
+same request and counted against the same ceiling. Sixty seconds is comfortable for a
+300-token summary and not reliably enough for the thinking in front of it. Raising the
+shared constant would have given Anthropic and OpenAI a longer deadline they have no use
+for, and a deadline is only useful if it is short enough to mean something.
+
+Retrying is bounded rather than persistent because a summary is not worth an unbounded
+spend of someone's quota. Three attempts and six seconds of pauses is the difference
+between absorbing a blip and hiding an outage.
+
+**Consequence.** A provider that is genuinely down is now reported after three attempts
+rather than one, so the worst case for a single hour is three timeouts plus the pauses.
+That is bounded, it only happens when the run was going to fail anyway, and the run still
+keeps every hour written before it.
+
+The pauses are compiled out under `cfg(test)`. Tests assert what is retried and how many
+times, never how long the pause was, and sleeping would cost every test that exercises a
+failure.
+
 ## AD-25: A saved day is a document, and the only thing the application will not delete
 
 **Decision.** The Summary view composes a day — its written summary, where the time went,

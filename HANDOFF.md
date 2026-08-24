@@ -132,7 +132,7 @@ Everything below was run and passed:
 
 - `cargo fmt --all -- --check` — clean.
 - `cargo clippy --workspace --all-targets -- -D warnings` — clean.
-- `cargo test --workspace` — 298 passed, 0 failed, 11 ignored.
+- `cargo test --workspace` — 302 passed, 0 failed, 11 ignored.
 - `npm test` — 76 passed.
 - `npm run build` and `npx tsc --noEmit` — clean.
 - The golden path driven in the browser preview: choose a model, store a key, give
@@ -189,6 +189,11 @@ in a row, that is new and worth reading properly.
   clock, reading a given window's text at most once every thirty seconds. Run the ignored
   desktop gate after touching anything the collector does per window — no unit test can
   see this. See AD-24.
+- **A flag that classifies a failure is not a policy for handling one.**
+  `InferenceError::is_transient` existed from the start, had its own tests, and no caller
+  ever read it. One slow answer from Google ended a whole day's summarization run. If a
+  predicate says something is worth retrying, find the code that retries on it before
+  believing the behaviour is there. See AD-28.
 - **A bounded walk can be bounded in the wrong dimension.** The visible-text read looked
   like a latency problem for a whole session — it returned one line from Chromium windows
   and the wall clock was the obvious suspect. It was not: 120 ms, 250 ms and 2 s all give
@@ -277,6 +282,8 @@ Recorded in `docs/ARCHITECTURE.md` AD-7, repeated here because they are easy to 
   Opera, Vivaldi, and Arc are from documentation alone.
 - Appearance is not verified — screenshots are unavailable in this environment.
 - The tray icon is not driven by any test.
-- No request has ever been sent to a real cloud provider.
+- Cloud providers are still mocked in every test. The one real call anybody has made was
+  Google in the installed build, and it timed out at 60 seconds — which is what AD-28
+  came from. Nothing in the suite talks to a real endpoint.
 - No GGUF has ever been downloaded, and `llama-server` has only ever been a stub.
 - Nothing checks that the five catalog repositories still exist; that is a release step.

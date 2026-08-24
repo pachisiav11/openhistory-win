@@ -24,7 +24,7 @@ use crate::google::GoogleProvider;
 use crate::llama::{LlamaOptions, LlamaServer, LlamaStatus};
 use crate::openai::OpenAiProvider;
 use crate::prompt::{day_prompt, episodes_in_hour, hour_prompt};
-use crate::provider::{Completion, InferenceError, Request};
+use crate::provider::{CLOUD_TIMEOUT, Completion, GOOGLE_TIMEOUT, InferenceError, Request};
 use crate::secrets::{self, Secret};
 
 /// What a summarization run did.
@@ -64,6 +64,14 @@ pub struct Readiness {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 }
+
+/// How many times one prompt is sent before the failure is reported.
+///
+/// Only what `InferenceError::is_transient` calls transient is tried again — a rate
+/// limit, a 5xx, a dropped connection, a timeout. A missing key or a refused prompt
+/// gives the same answer however many times it is asked, and asking again only spends
+/// the user's quota to arrive at the same place.
+const MAX_ATTEMPTS: u32 = 3;
 
 /// Chooses a provider from the settings and writes summaries with it.
 pub struct InferenceService {
@@ -339,8 +347,41 @@ impl InferenceService {
             .map_err(|error| InferenceError::Transport(error.to_string()))
     }
 
-    /// Send one prompt to whichever provider is configured.
+    /// Send one prompt, trying again when the reason it failed might not last.
+    ///
+    /// A summary is a background job with no one waiting on this exact attempt, so a
+    /// blip is worth absorbing rather than reporting. The alternative is what the user
+    /// saw: one slow answer from Google and the whole day's run stops with a message
+    /// about sixty seconds.
     async fn generate(
+        &self,
+        config: &Config,
+        prompt: crate::prompt::Prompt,
+    ) -> Result<Completion, InferenceError> {
+        let mut attempt = 1;
+        loop {
+            let outcome = self.generate_once(config, prompt.clone()).await;
+            let Err(error) = outcome else {
+                return outcome;
+            };
+
+            if !error.is_transient() || attempt >= MAX_ATTEMPTS {
+                return Err(error);
+            }
+
+            tracing::warn!(
+                attempt,
+                of = MAX_ATTEMPTS,
+                %error,
+                "a summary attempt failed for a reason that may not last; trying again"
+            );
+            backoff(attempt).await;
+            attempt += 1;
+        }
+    }
+
+    /// Send one prompt to whichever provider is configured, once.
+    async fn generate_once(
         &self,
         config: &Config,
         prompt: crate::prompt::Prompt,
@@ -361,7 +402,7 @@ impl InferenceService {
                     .ok_or(InferenceError::NoApiKey)?;
 
                 let model = &config.inference.cloud_model;
-                let request = Request::cloud(prompt);
+                let request = Request::cloud(prompt).with_timeout(cloud_timeout(cloud));
                 let base = self.cloud_base_url();
 
                 match cloud {
@@ -420,6 +461,31 @@ impl InferenceService {
         tests::base_url_override()
     }
 }
+
+/// How long a cloud provider is given to answer.
+fn cloud_timeout(provider: InferenceProvider) -> std::time::Duration {
+    match provider {
+        InferenceProvider::Google => GOOGLE_TIMEOUT,
+        _ => CLOUD_TIMEOUT,
+    }
+}
+
+/// How long to wait before the attempt after `attempt`.
+///
+/// Two seconds, then four. A provider that just rate-limited a burst needs a pause
+/// rather than an immediate second ask, and a dropped connection does not care either
+/// way, so the two are not worth telling apart. The whole ladder adds six seconds to a
+/// run that is going to fail anyway, which is cheap against re-summarizing a day by
+/// hand.
+#[cfg(not(test))]
+async fn backoff(attempt: u32) {
+    tokio::time::sleep(std::time::Duration::from_secs(1 << attempt)).await;
+}
+
+/// Tests assert what is retried, never how long the pause was. Sleeping here would buy
+/// nothing and cost every test that exercises a failure.
+#[cfg(test)]
+async fn backoff(_attempt: u32) {}
 
 #[cfg(test)]
 mod tests {
@@ -673,6 +739,84 @@ mod tests {
             .unwrap();
         assert_eq!(again.hours_written, vec![9, 10]);
         assert!(again.daily_written);
+    }
+
+    #[test]
+    fn google_is_given_longer_to_answer_than_the_other_clouds() {
+        assert_eq!(cloud_timeout(InferenceProvider::Google), GOOGLE_TIMEOUT);
+        assert_eq!(cloud_timeout(InferenceProvider::Anthropic), CLOUD_TIMEOUT);
+        assert_eq!(cloud_timeout(InferenceProvider::OpenAi), CLOUD_TIMEOUT);
+        assert!(
+            GOOGLE_TIMEOUT > CLOUD_TIMEOUT,
+            "the point of the constant is that it is longer"
+        );
+    }
+
+    /// A blip is absorbed rather than reported. The server refuses twice and then
+    /// answers, and the caller is told about a summary rather than a rate limit.
+    #[tokio::test]
+    async fn a_transient_failure_is_tried_again() {
+        let server = FakeHttp::scripted(vec![
+            (429, r#"{"error":{"message":"rate limited"}}"#),
+            (503, r#"{"error":{"message":"overloaded"}}"#),
+            (200, &answer("A focused hour.")),
+        ])
+        .await;
+        point_cloud_at(&server.base_url());
+
+        let temp = tempfile::tempdir().unwrap();
+        let service = InferenceService::in_dir(temp.path()).unwrap();
+        let written = service
+            .summarize_hour(&cloud_config(), &report(), 9)
+            .await
+            .unwrap();
+
+        assert_eq!(written.text, "A focused hour.");
+        assert_eq!(
+            server.request_count(),
+            3,
+            "both refusals should have been retried"
+        );
+    }
+
+    /// Trying again is capped. The server never recovers, and the error the caller
+    /// finally sees is the provider's own.
+    #[tokio::test]
+    async fn trying_again_gives_up_after_the_third_attempt() {
+        let server = FakeHttp::serving(503, r#"{"error":{"message":"overloaded"}}"#).await;
+        point_cloud_at(&server.base_url());
+
+        let temp = tempfile::tempdir().unwrap();
+        let service = InferenceService::in_dir(temp.path()).unwrap();
+        let error = service
+            .summarize_hour(&cloud_config(), &report(), 9)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("overloaded"), "{error}");
+        assert_eq!(server.request_count(), MAX_ATTEMPTS as usize);
+    }
+
+    /// A refusal that will be identical next time is reported at once. Asking again
+    /// would spend the user's quota to arrive at the same answer.
+    #[tokio::test]
+    async fn a_failure_that_will_not_change_is_not_tried_again() {
+        let server = FakeHttp::serving(400, r#"{"error":{"message":"malformed request"}}"#).await;
+        point_cloud_at(&server.base_url());
+
+        let temp = tempfile::tempdir().unwrap();
+        let service = InferenceService::in_dir(temp.path()).unwrap();
+        let error = service
+            .summarize_hour(&cloud_config(), &report(), 9)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("malformed request"), "{error}");
+        assert_eq!(
+            server.request_count(),
+            1,
+            "a 400 must be asked exactly once"
+        );
     }
 
     /// The property that matters when a run fails half way: what was already written

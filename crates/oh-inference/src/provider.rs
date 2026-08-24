@@ -16,6 +16,15 @@ use crate::prompt::Prompt;
 pub const CLOUD_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LOCAL_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// How long Google is given, which is longer than the other two clouds.
+///
+/// Gemini reasons before it answers, and that reasoning is generated on the same
+/// request as the summary — `google.rs` buys it 4,000 tokens of headroom that neither
+/// Anthropic nor OpenAI is asked for. Sixty seconds is enough for the summary and not
+/// reliably enough for the thinking that precedes it, which is how a working
+/// configuration produced "google did not answer within 60s".
+pub const GOOGLE_TIMEOUT: Duration = Duration::from_secs(120);
+
 #[derive(Debug, thiserror::Error)]
 pub enum InferenceError {
     /// No provider is selected, or the selected one is not configured.
@@ -142,6 +151,12 @@ impl Request {
             prompt,
             timeout: LOCAL_TIMEOUT,
         }
+    }
+
+    /// Give this request a different deadline from its kind's default.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 }
 
