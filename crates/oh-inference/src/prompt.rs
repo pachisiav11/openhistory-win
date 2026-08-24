@@ -22,7 +22,10 @@ which applications and windows they had in front of them. Be concrete: name the 
 applications, files, and topics you can see. Never invent detail that is not in the \
 log. Some entries are marked as private sessions with nothing recorded — mention them \
 only as time spent in that application, and never guess what they contained. Reply \
-with prose only: no headings, no bullet points, no preamble such as \"Here is\".";
+with prose only: no headings, no bullet points, no preamble such as \"Here is\". Every \
+sentence must carry something from the log: a name, a file, a page, a topic, a time or \
+a duration. Do not characterize the time in general terms — no \"a productive \
+session\", no \"a mix of tasks\" — and do not restate totals you were given.";
 
 /// The most episodes to put in one hourly prompt. An hour with more than this was
 /// spent switching windows, and the tail of the list adds noise rather than meaning.
@@ -128,14 +131,23 @@ pub fn day_prompt(date: NaiveDate, rollup: &DailyRollup, hours: &[HourSummary]) 
     }
 
     user.push_str(
-        "\nWrite four to six sentences summarizing the day: the main work done, the \
-notable changes of context, and any pattern in how the time went.",
+        "\nWrite a detailed account of this day in three paragraphs, twelve to \
+eighteen sentences in all. First: the pieces of work themselves, each one named — the \
+files, documents, pages and topics it involved, and roughly how long it took. Second: \
+the order the day ran in, where the work changed direction, and which of those changes \
+were returns to something from earlier. Third: what the shape of the time says — the \
+longest unbroken stretch, where the attention scattered, and anything begun and not \
+returned to. Name something concrete from the log in every sentence, and where an \
+hour holds little, write less about it rather than padding it out.\n\n\
+After those three paragraphs, leave a blank line and add one more, separate from and \
+outside the detailed account above: four to five sentences that just summarize what \
+was done during the day.",
     );
 
     Some(Prompt {
         system: SYSTEM.to_owned(),
         user,
-        max_tokens: 600,
+        max_tokens: 1800,
     })
 }
 

@@ -305,6 +305,31 @@ export interface LocalModel {
   fitsMemory: boolean;
 }
 
+/**
+ * What the local provider has to run models with.
+ *
+ * `llama-server` is not part of this application; it is fetched from the pinned
+ * llama.cpp release, or pointed at by hand when somebody already has one.
+ */
+export interface ServerStatus {
+  /** The llama.cpp build this application fetches. */
+  build: string;
+  /** A server is available, so a local model can actually run. */
+  installed: boolean;
+  path?: string;
+  /** The path came from the user rather than from the fetch. */
+  chosen: boolean;
+  /** How large the download is, before the server has said. */
+  approximateBytes: number;
+}
+
+/**
+ * The identifier `llama-server` progress arrives under on {@link DOWNLOAD_EVENT}.
+ *
+ * It shares the models' event so there is one progress path rather than two.
+ */
+export const RUNTIME_ID = "llama-server";
+
 /** One step of a download. Arrives on {@link DOWNLOAD_EVENT}. */
 export interface DownloadProgress {
   modelId: string;
@@ -367,6 +392,8 @@ export const removeModel = (id: string) => invoke<LocalModel>("remove_model", { 
 export const useLocalModel = (id: string) => invoke<Config>("use_local_model", { id });
 export const chooseLocalServer = () => invoke<Config | null>("choose_local_server");
 export const forgetLocalServer = () => invoke<Config>("forget_local_server");
+export const localServer = () => invoke<ServerStatus>("local_server");
+export const fetchLocalServer = () => invoke<ServerStatus>("fetch_local_server");
 
 export const apiKeys = () => invoke<KeyStatus[]>("api_keys");
 export const storeApiKey = (provider: InferenceProvider, key: string) =>

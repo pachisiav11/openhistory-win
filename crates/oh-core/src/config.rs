@@ -280,7 +280,8 @@ pub struct InferenceConfig {
     /// Context window handed to `llama-server`.
     pub context_size: u32,
     pub idle_unload_seconds: u64,
-    /// Write summaries as the day fills in, rather than only when asked.
+    /// Write yesterday's day summary automatically each morning, rather than only
+    /// when asked. Uses whichever provider is already chosen above.
     pub auto_summarize: bool,
 }
 

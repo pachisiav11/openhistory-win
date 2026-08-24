@@ -882,3 +882,59 @@ watches the keyboard or the pointer at all.
 of its lines so the panel cannot quietly lose it. The cloud-agreement text is now the
 third place that has to agree, since document names and lines of on-screen text now reach
 a provider when a cloud model is chosen.
+
+## AD-30: The application fetches its own local runtime, and writes yesterday's summary itself
+
+**Decision.** `llama-server` is no longer something the user has to find. Choosing "On
+this machine" with no server already present fetches the pinned llama.cpp CPU build
+(`oh-inference::runtime`) into the same data folder the model catalog uses, over the same
+resumable download and the same `DOWNLOAD_EVENT` progress the models already report,
+under a reserved identifier (`RUNTIME_ID`) so the settings page has one progress bar
+rather than two. The archive is unpacked whole — every DLL, not just the 9 KB launcher —
+because the work is in `llama-server-impl.dll`, `ggml-base.dll` and fifteen
+instruction-set-specific `ggml-cpu-*.dll` files chosen at run time, and guessing which
+subset a given machine needs fails as a missing DLL at spawn time. `Find…` remains, for
+anyone who already has a build and would rather point at it than fetch another.
+
+Alongside it, a background task (`auto_summary`) checks every thirty minutes and, once
+the local clock reads past 05:00 and `inference.auto_summarize` is on, calls the same
+`summarize_day` the day view calls, for yesterday, with whichever provider is already
+chosen. Nothing new was built to make this safe to call on a timer: `summarize_day` was
+already idempotent (AD-28's stale-hour check means a day already summarized and unchanged
+costs nothing but a disk read), so the scheduler does not need to remember what it has
+already done — asking again is free when there is nothing left to do.
+
+The day prompt was also rewritten to ask for three or four times the previous length: the
+detailed body grew from four-to-six sentences to three paragraphs of twelve-to-eighteen,
+each instructed to name something concrete from the log rather than characterize the time
+in general terms, and a further instruction bans restating the totals the prompt already
+supplied. A fourth, explicitly separate paragraph — four to five sentences, after a blank
+line, outside the detailed account — closes with what the day added up to as a whole.
+
+**Why.** A downloaded model was unusable until the user found a matching llama.cpp
+release by hand, worked out which of thirteen Windows builds their machine needed, and
+pointed the application at the right file inside it — a task AD-29 already made visible
+but did not remove. Fetching it automatically finishes what AD-29 started: nobody should
+have to know llama.cpp exists to use a model that runs on their own machine.
+
+The morning scheduler exists because a summary that only appears when asked is a summary
+most days never get one. Gating on 05:00 local rather than firing at the stroke of
+midnight is a guess that whoever is still awake right after midnight is still living the
+day the calendar just turned past, and writing its summary out from under them would
+describe less of the day than actually happened.
+
+The longer prompt exists because four to six sentences condensing a full day's hourly
+summaries left most of the day unsaid — a paragraph has room to name what a sentence
+does not. The explicit ban on restating totals and the instruction to name something
+concrete in every sentence exist because the model prompt is not just "write more"; that
+alone produces padding, hedged generalities that could describe any day.
+
+**Consequence.** The pinned build (`BUILD = "b10612"`) carries the same AD-5 obligation
+the model catalog already has: moving to a newer one is a release step, not a config
+edit, because the asset name is not derived from "latest" and a wrong guess fails at the
+worst moment, in front of a user who cannot tell why. The `#[ignore]`d
+`the_pinned_asset_is_still_published` test is the gate to run before changing `BUILD`.
+
+The archive's on-disk size (`APPROXIMATE_BYTES`) is a measured constant rather than
+something asked of the server before the first byte arrives, so the settings page can
+say what is about to be fetched before the download has told it anything.

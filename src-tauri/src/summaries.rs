@@ -280,6 +280,106 @@ pub fn forget_local_server(state: State<'_, AppState>) -> Result<Config, String>
     Ok(config)
 }
 
+/// The identifier the `llama-server` fetch reports under on [`DOWNLOAD_EVENT`].
+///
+/// It rides the same event as the models so the settings page has one progress path
+/// rather than two that drift apart.
+pub const RUNTIME_ID: &str = "llama-server";
+
+/// What the settings page knows about the program that runs local models.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStatus {
+    /// The llama.cpp build this application fetches.
+    pub build: &'static str,
+    /// A server is available, so a local model can actually run.
+    pub installed: bool,
+    /// Where it is, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<std::path::PathBuf>,
+    /// The path came from the user rather than from the fetch.
+    pub chosen: bool,
+    /// How large the download is, before the server has said.
+    pub approximate_bytes: u64,
+}
+
+impl ServerStatus {
+    fn of(config: &Config) -> Self {
+        let chosen = config
+            .inference
+            .local_server_path
+            .as_ref()
+            .filter(|path| path.is_file())
+            .cloned();
+        let path = chosen.clone().or_else(oh_inference::runtime::installed);
+        ServerStatus {
+            build: oh_inference::runtime::BUILD,
+            installed: path.is_some(),
+            path,
+            chosen: chosen.is_some(),
+            approximate_bytes: oh_inference::runtime::APPROXIMATE_BYTES,
+        }
+    }
+}
+
+/// Whether the local provider has a program to run, and which one.
+#[tauri::command]
+pub fn local_server(app: State<'_, AppState>) -> ServerStatus {
+    ServerStatus::of(&app.config())
+}
+
+/// Fetch `llama-server`, reporting progress on [`DOWNLOAD_EVENT`] under [`RUNTIME_ID`].
+///
+/// Fetching one that is already there is a no-op, so the settings page can call this
+/// whenever a local model is chosen without asking first whether it needs to.
+#[tauri::command]
+pub async fn fetch_local_server(
+    handle: AppHandle,
+    app: State<'_, AppState>,
+    state: State<'_, SummaryState>,
+) -> Result<ServerStatus, String> {
+    let cancel = Cancel::new();
+    if state
+        .downloads
+        .lock()
+        .insert(RUNTIME_ID.to_owned(), cancel.clone())
+        .is_some()
+    {
+        return Err("llama-server is already being fetched".to_owned());
+    }
+
+    let emitter = handle.clone();
+    let listener: ProgressListener = Arc::new(move |progress| {
+        let _ = emitter.emit(DOWNLOAD_EVENT, DownloadProgress::step(RUNTIME_ID, progress));
+    });
+
+    let outcome = oh_inference::runtime::fetch(Some(listener), &cancel).await;
+    state.downloads.lock().remove(RUNTIME_ID);
+
+    match outcome {
+        Ok(_) => {
+            // The last byte arriving is not the end of the work: the archive still has
+            // to be unpacked. Announcing done only now keeps the interface from saying
+            // it is ready while fifty DLLs are still being written.
+            let _ = handle.emit(
+                DOWNLOAD_EVENT,
+                DownloadProgress {
+                    model_id: RUNTIME_ID.to_owned(),
+                    downloaded_bytes: oh_inference::runtime::APPROXIMATE_BYTES,
+                    total_bytes: None,
+                    done: true,
+                    error: None,
+                },
+            );
+            Ok(ServerStatus::of(&app.config()))
+        }
+        Err(error) => {
+            let _ = handle.emit(DOWNLOAD_EVENT, DownloadProgress::failed(RUNTIME_ID, &error));
+            Err(error.to_string())
+        }
+    }
+}
+
 /// Fill in `local_model_path` from `local_model_id`.
 ///
 /// The window chooses a model by identifier; where the file lives is the backend's

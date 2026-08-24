@@ -1,0 +1,1 @@
+- 2026-08-24 19:50: Push, rebuild the installer and reinstall.

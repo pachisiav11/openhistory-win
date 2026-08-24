@@ -19,6 +19,7 @@ pub mod llama;
 pub mod openai;
 pub mod prompt;
 pub mod provider;
+pub mod runtime;
 pub mod secrets;
 pub mod service;
 

@@ -6,9 +6,11 @@
 //!
 //! Two properties matter more than speed here:
 //!
-//! - **Nothing is regenerated.** An hour that already has a summary is left alone
-//!   unless the caller asks for a rewrite. Summaries cost money or a model load, and
-//!   yesterday's hours cannot change.
+//! - **Nothing is regenerated without reason.** An hour that already has a summary is
+//!   left alone unless the caller asks for a rewrite, or the hour has gained a minute
+//!   or more of activity since — which is what happens to an hour summarized while it
+//!   was still filling. Summaries cost money or a model load, so the test is whether
+//!   the hour has actually changed, not whether time has passed.
 //! - **A failure part-way through keeps what was written.** Every hour is saved as it
 //!   completes, so a rate limit at 15:00 leaves the morning summarized rather than
 //!   throwing the run away.
@@ -188,8 +190,8 @@ impl InferenceService {
                         provider,
                         ready: false,
                         blocked_by: Some(
-                            "llama-server was not found. Point at it in Settings, or put it \
-                             beside the application or on PATH."
+                            "llama-server has not been fetched yet. Settings will get \
+                             it, or you can point at a copy you already have."
                                 .into(),
                         ),
                         model,
@@ -243,7 +245,8 @@ impl InferenceService {
         };
 
         for hour in &report.rollup.hours {
-            if !rewrite && summary.hour(hour.hour).is_some() {
+            let written = summary.hour(hour.hour);
+            if !rewrite && written.is_some_and(|written| !is_stale(written, hour)) {
                 run.hours_skipped.push(hour.hour);
                 continue;
             }
@@ -460,6 +463,20 @@ impl InferenceService {
     fn cloud_base_url(&self) -> Option<String> {
         tests::base_url_override()
     }
+}
+
+/// Whether an hour's summary was written before the hour had finished happening.
+///
+/// A summary written at twenty past covers twenty minutes and then stands for the whole
+/// hour, which is how a day summarized as it went ended up describing a fraction of it.
+/// The stored `active_ms` is what the hour held when the summary was written, so more
+/// activity since then means the summary is describing less than the hour now contains.
+///
+/// The minute of slack is there because the rollup moves by a few milliseconds as
+/// episodes close, and rewriting an hour for that would spend a model call to produce
+/// the same sentences.
+fn is_stale(written: &HourSummary, hour: &oh_processing::rollup::HourlyRollup) -> bool {
+    hour.active_ms.saturating_sub(written.active_ms) >= 60_000
 }
 
 /// Where `llama-server` is, if it can be found at all.

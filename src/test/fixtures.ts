@@ -1,7 +1,9 @@
 /** Builders shared by the view tests. One shape per thing the backend serializes. */
 import {
+  emitDownload,
   localDate,
   mockCommand,
+  RUNTIME_ID,
   type AppInfo,
   type AppUsage,
   type CloudModel,
@@ -16,6 +18,7 @@ import {
   type McpStatus,
   type Readiness,
   type SearchHit,
+  type ServerStatus,
   type Status,
 } from "../lib/ipc";
 
@@ -203,6 +206,20 @@ export function backend(
       overrides.readiness ?? { provider: "disabled", ready: false, blockedBy: "No model is chosen." },
   );
   mockCommand("local_server_status", () => ({ running: false, managed: false }));
+  let serverFetched = false;
+  const serverStatus = (): ServerStatus => ({
+    build: "b10612",
+    installed: serverFetched,
+    chosen: false,
+    approximateBytes: 18_067_753,
+    ...(serverFetched ? { path: `${DATA_DIR}\\runtime\\b10612\\llama-server.exe` } : {}),
+  });
+  mockCommand("local_server", serverStatus);
+  mockCommand("fetch_local_server", (): ServerStatus => {
+    serverFetched = true;
+    emitDownload({ modelId: RUNTIME_ID, downloadedBytes: 18_067_753, done: true });
+    return serverStatus();
+  });
   mockCommand("day_summary", (args) => summary({ date: String(args?.date ?? localDate()) }));
   mockCommand("mcp_status", (): McpStatus => overrides.mcp ?? { running: false, hasToken: false });
   mockCommand("library_entries", (): LibraryEntry[] => []);

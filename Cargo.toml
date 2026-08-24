@@ -46,6 +46,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.24.1", features = ["v4", "serde"] }
 windows = "0.62.2"
 windows-core = "0.62.2"
+zip = { version = "6", default-features = false, features = ["deflate"] }
 
 [profile.release]
 codegen-units = 1

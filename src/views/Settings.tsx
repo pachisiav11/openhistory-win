@@ -31,8 +31,11 @@ import {
   storeApiKey,
   useCloudModel,
   chooseLocalServer,
+  fetchLocalServer,
   forgetLocalServer,
+  localServer,
   useLocalModel,
+  RUNTIME_ID,
   type CloudModel,
   type Config,
   type DownloadProgress,
@@ -42,6 +45,7 @@ import {
   type LocalModel,
   type McpStatus,
   type Readiness,
+  type ServerStatus,
 } from "../lib/ipc";
 
 interface Props {
@@ -73,6 +77,7 @@ export default function Settings({ onChanged }: Props) {
   const [keys, setKeys] = useState<KeyStatus[]>([]);
   const [readiness, setReadiness] = useState<Readiness | null>(null);
   const [llama, setLlama] = useState<LlamaStatus | null>(null);
+  const [server, setServer] = useState<ServerStatus | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [snippet, setSnippet] = useState<string | null>(null);
@@ -95,6 +100,7 @@ export default function Settings({ onChanged }: Props) {
     apiKeys().then(setKeys).catch(setError);
     inferenceReadiness().then(setReadiness).catch(setError);
     localServerStatus().then(setLlama).catch(setError);
+    localServer().then(setServer).catch(setError);
     mcpStatus().then(setMcp).catch(setError);
   }, []);
 
@@ -106,6 +112,7 @@ export default function Settings({ onChanged }: Props) {
         setDownloads((all) => ({ ...all, [progress.modelId]: progress }));
         if (progress.done) {
           localModels().then(setModels).catch(setError);
+          localServer().then(setServer).catch(setError);
         }
       }),
     [],
@@ -174,6 +181,12 @@ export default function Settings({ onChanged }: Props) {
   const needsKey = where === "cloud" && chosen && !chosen.hasKey;
   const installed = models.filter((one) => one.installed);
 
+  // The fetch rides the models’ progress event under a reserved identifier, so the
+  // bar here is the same bar the models draw.
+  const runtime = downloads[RUNTIME_ID];
+  const fetching = runtime !== undefined && !runtime.done;
+  const runtimeDone = runtime ? percent(runtime) : null;
+
   const turnOff = () =>
     save((current) => ({
       ...current,
@@ -192,15 +205,27 @@ export default function Settings({ onChanged }: Props) {
     }
     if (next === "local") {
       const target = config.inference.localModelId ?? installed[0]?.id;
-      // With nothing downloaded there is no model to name, and refusing the choice
-      // would leave the radio ignoring clicks with no explanation. Move anyway: the
-      // panel then says what to download.
-      if (target) act(() => useLocalModel(target));
-      else
-        save((current) => ({
-          ...current,
-          inference: { ...current.inference, provider: "local" },
-        }));
+      act(async () => {
+        if (target) {
+          await useLocalModel(target);
+        } else {
+          // With nothing downloaded there is no model to name, and refusing the
+          // choice would leave the radio ignoring clicks with no explanation. Move
+          // anyway: the panel then says what to download.
+          const moved = {
+            ...latest.current!,
+            inference: { ...latest.current!.inference, provider: "local" as const },
+          };
+          latest.current = moved;
+          setLocalConfig(moved);
+          await setConfig(moved);
+        }
+        // A model with no program to run it is a model that cannot be used, and the
+        // failure arrives later as a readiness message naming a binary the user has
+        // never heard of. Eighteen megabytes is smaller than any of the models, so
+        // it is fetched here rather than asked about.
+        if (!server?.installed) await fetchLocalServer();
+      });
       return;
     }
     const target = config.inference.cloudModel || cloud[0]?.id;
@@ -435,8 +460,18 @@ export default function Settings({ onChanged }: Props) {
               <input
                 className="input"
                 readOnly
-                value={config.inference.localServerPath ?? "Not found"}
+                value={server?.path ?? (fetching ? "Fetching…" : "Not on this machine yet")}
               />
+              {server?.installed ? null : (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy || fetching}
+                  onClick={() => act(() => fetchLocalServer(), "llama-server is ready.")}
+                >
+                  {fetching ? "Fetching…" : "Get it"}
+                </button>
+              )}
               <button
                 type="button"
                 className="button"
@@ -456,11 +491,21 @@ export default function Settings({ onChanged }: Props) {
                 </button>
               ) : null}
             </div>
+            {fetching ? (
+              <span className="model__progress">
+                <span
+                  className="model__fill"
+                  style={{ width: runtimeDone === null ? "100%" : `${runtimeDone}%` }}
+                />
+              </span>
+            ) : null}
+            {runtime?.error ? <span className="model__error">{runtime.error}</span> : null}
             <span className="field__hint">
-              A local model needs llama-server to run it, and this application does not
-              ship one. Download a llama.cpp release and point at the llama-server
-              program inside it. Leaving this clear looks beside the application and on
-              PATH.
+              {server?.chosen
+                ? "Your own copy, chosen by hand. Clear it to go back to the one this application fetches."
+                : server?.installed
+                  ? `Build ${server.build}, fetched from the llama.cpp releases. Nothing else to do.`
+                  : `A local model needs llama-server to run it. It is fetched for you the first time you choose a model here, about ${megabytes(server?.approximateBytes ?? 0)}. Find… points at a copy you already have instead.`}
             </span>
           </div>
         ) : null}
@@ -528,7 +573,7 @@ export default function Settings({ onChanged }: Props) {
               }))
             }
           />
-          <span>Write summaries as the day fills in, rather than only when asked</span>
+          <span>Write yesterday's summary automatically each morning, rather than only when asked</span>
         </label>
 
         {readiness ? (

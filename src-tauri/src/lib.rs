@@ -4,6 +4,7 @@
 //! surface the interface calls. All of the real work lives in the workspace crates;
 //! this module is the wiring between them and the window.
 
+pub mod auto_summary;
 pub mod collector_service;
 pub mod library;
 pub mod mcp;
@@ -396,6 +397,8 @@ pub fn run() {
                     mcp::start_if_enabled(&state, &config).await;
                 }
             });
+
+            auto_summary::spawn(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -429,6 +432,8 @@ pub fn run() {
             summaries::use_local_model,
             summaries::choose_local_server,
             summaries::forget_local_server,
+            summaries::local_server,
+            summaries::fetch_local_server,
             summaries::store_api_key,
             summaries::api_keys,
             summaries::forget_api_key,

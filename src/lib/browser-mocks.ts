@@ -14,6 +14,7 @@ import {
   emitStatus,
   isTauri,
   mockCommand,
+  RUNTIME_ID,
   type ActivityEvent,
   type AppInfo,
   type AppUsage,
@@ -33,10 +34,15 @@ import {
   type Readiness,
   type RunReport,
   type SearchHit,
+  type ServerStatus,
   type Status,
 } from "./ipc";
 
 const DATA_DIR = String.raw`C:\Users\you\AppData\Roaming\openhistory-win`;
+
+/** The llama.cpp build the real backend fetches, echoed so the panel reads the same. */
+const RUNTIME_BUILD = "b10612";
+const RUNTIME_BYTES = 18_067_753;
 
 function minutesAgo(minutes: number): string {
   return new Date(Date.now() - minutes * 60_000).toISOString();
@@ -352,6 +358,14 @@ export function installBrowserMocks(): void {
 
   const storedKeys = new Set<string>();
   const installedModels = new Set<string>();
+  let serverFetched = false;
+  const serverStatus = (): ServerStatus => ({
+    build: RUNTIME_BUILD,
+    installed: serverFetched,
+    ...(serverFetched ? { path: `${DATA_DIR}\\runtime\\${RUNTIME_BUILD}\\llama-server.exe` } : {}),
+    chosen: false,
+    approximateBytes: RUNTIME_BYTES,
+  });
   const summaries = new Map<string, DaySummary>();
   let mcp: McpStatus = { running: false, hasToken: false };
   let deleted = false;
@@ -472,6 +486,28 @@ export function installBrowserMocks(): void {
   // A browser tab has no file dialog, and pretending one was dismissed is the honest
   // answer rather than inventing a path that does not exist on this machine.
   mockCommand("choose_local_server", (): Config | null => null);
+
+  mockCommand("local_server", (): ServerStatus => serverStatus());
+
+  mockCommand("fetch_local_server", (): ServerStatus => {
+    let sent = 0;
+    const step = Math.round(RUNTIME_BYTES / 4);
+    const tick = setInterval(() => {
+      sent = Math.min(RUNTIME_BYTES, sent + step);
+      const done = sent >= RUNTIME_BYTES;
+      if (done) {
+        clearInterval(tick);
+        serverFetched = true;
+      }
+      emitDownload({
+        modelId: RUNTIME_ID,
+        downloadedBytes: sent,
+        totalBytes: RUNTIME_BYTES,
+        done,
+      });
+    }, 400);
+    return serverStatus();
+  });
 
   mockCommand("forget_local_server", (): Config => {
     const { localServerPath: _dropped, ...rest } = config.inference;

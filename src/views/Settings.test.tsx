@@ -138,7 +138,7 @@ describe("Settings — summaries", () => {
     await waitFor(() => expect(chosen).toEqual(["two"]));
   });
 
-  it("says where llama-server is, and that nothing ships one", async () => {
+  it("says llama-server is not on this machine yet, and offers to fetch it", async () => {
     backend({
       config: config({
         inference: { ...config().inference, provider: "local", localModelId: "one" },
@@ -147,9 +147,26 @@ describe("Settings — summaries", () => {
     mockCommand("local_models", () => [localModel({ id: "one", installed: true })]);
     render(<Settings onChanged={() => {}} />);
 
-    expect(await screen.findByDisplayValue("Not found")).toBeInTheDocument();
-    expect(screen.getByText(/does not\s+ship one/)).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("Not on this machine yet")).toBeInTheDocument();
+    expect(screen.getByText(/fetched for you the first time/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Find/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Get it/ })).toBeEnabled();
+  });
+
+  it("fetches llama-server on request and shows where it landed", async () => {
+    backend({
+      config: config({
+        inference: { ...config().inference, provider: "local", localModelId: "one" },
+      }),
+    });
+    mockCommand("local_models", () => [localModel({ id: "one", installed: true })]);
+    render(<Settings onChanged={() => {}} />);
+
+    await screen.findByDisplayValue("Not on this machine yet");
+    await userEvent.setup().click(screen.getByRole("button", { name: /Get it/ }));
+
+    expect(await screen.findByDisplayValue(/llama-server\.exe$/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Get it/ })).not.toBeInTheDocument();
   });
 
   it("sets the provider from the model, not from a second dropdown", async () => {
