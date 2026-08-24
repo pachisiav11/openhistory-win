@@ -138,6 +138,45 @@ describe("Day view", () => {
     expect(asked).toEqual([9]);
   });
 
+  it("offers to write an hour again once it already has a summary", async () => {
+    // An hour summarized while it was still filling describes only the part that had
+    // happened by then. The control to correct it used to disappear the moment a
+    // summary existed, leaving the first attempt standing for good.
+    backend({ readiness: READY });
+    mockCommand("day_report", () => report([episode()], hours()));
+    const asked: number[] = [];
+    mockCommand("day_summary", () => ({
+      date: "2026-08-21",
+      hours: [
+        {
+          hour: 9,
+          text: "Half an hour that was not over yet.",
+          activeMs: 0,
+          generatedAt: "",
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+        },
+      ],
+    }));
+    mockCommand("summarize_hour", (args) => {
+      asked.push(Number(args?.hour));
+      return {
+        hour: Number(args?.hour),
+        text: "The whole hour, this time.",
+        activeMs: 0,
+        generatedAt: "",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      };
+    });
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    expect(await screen.findByText("Half an hour that was not over yet.")).toBeInTheDocument();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Write again" }));
+
+    expect(asked).toEqual([9]);
+  });
+
   it("moves between days and back to today", async () => {
     backend();
     const dates: string[] = [];

@@ -244,20 +244,25 @@ export default function DayView({
                   </span>
                   <span className="hourbar__active">{duration(hour.activeMs)}</span>
                   <span className="hourbar__said">
-                    {said ? (
-                      said.text
-                    ) : (
-                      <button
-                        type="button"
-                        className="episode__more"
-                        disabled={!ready || busy !== null}
-                        onClick={() =>
-                          run(`hour-${hour.hour}`, () => summarizeHour(date, hour.hour))
-                        }
-                      >
-                        {busy === `hour-${hour.hour}` ? "Writing…" : "Summarize this hour"}
-                      </button>
-                    )}
+                    {said ? said.text : null}
+                    {/* An hour summarized while it was still filling describes only the
+                        part that had happened, so the way to correct one has to be here
+                        beside it — summarize_hour has always rewritten whatever was
+                        there, but nothing in the interface could ask it to. */}
+                    <button
+                      type="button"
+                      className="episode__more"
+                      disabled={!ready || busy !== null}
+                      onClick={() =>
+                        run(`hour-${hour.hour}`, () => summarizeHour(date, hour.hour))
+                      }
+                    >
+                      {busy === `hour-${hour.hour}`
+                        ? "Writing…"
+                        : said
+                          ? "Write again"
+                          : "Summarize this hour"}
+                    </button>
                   </span>
                 </li>
               );

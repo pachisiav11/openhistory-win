@@ -10,7 +10,7 @@
 //! [`oh_processing::redact::PublicEpisode`] first. That is the only path in, so an
 //! executable path or a query string cannot reach a provider by accident.
 
-use chrono::NaiveDate;
+use chrono::{DateTime, Local, NaiveDate, Timelike};
 use oh_core::HourSummary;
 use oh_processing::redact::PublicEpisode;
 use oh_processing::rollup::{DailyRollup, HourlyRollup, human_duration};
@@ -25,7 +25,11 @@ only as time spent in that application, and never guess what they contained. Rep
 with prose only: no headings, no bullet points, no preamble such as \"Here is\". Every \
 sentence must carry something from the log: a name, a file, a page, a topic, a time or \
 a duration. Do not characterize the time in general terms — no \"a productive \
-session\", no \"a mix of tasks\" — and do not restate totals you were given.";
+session\", no \"a mix of tasks\" — and do not restate totals you were given. Window \
+controls, menu and toolbar labels, and other interface furniture are not activity: \
+never describe them. Where an entry carries nothing but an application name, say that \
+the application was in use and nothing further — a short summary is the correct answer \
+to a thin hour, and inventing detail to fill one is worse than brevity.";
 
 /// The most episodes to put in one hourly prompt. An hour with more than this was
 /// spent switching windows, and the tail of the list adds noise rather than meaning.
@@ -68,7 +72,7 @@ pub fn hour_prompt(date: NaiveDate, hour: &HourlyRollup, episodes: &[&Episode]) 
     );
 
     for episode in episodes.iter().take(MAX_EPISODES_PER_HOUR) {
-        user.push_str(&render_episode(&PublicEpisode::from(*episode)));
+        user.push_str(&render_episode(&PublicEpisode::from(*episode), hour.hour));
     }
     if episodes.len() > MAX_EPISODES_PER_HOUR {
         user.push_str(&format!(
@@ -78,7 +82,9 @@ pub fn hour_prompt(date: NaiveDate, hour: &HourlyRollup, episodes: &[&Episode]) 
     }
 
     user.push_str(
-        "\nWrite two or three sentences describing what was being worked on in this hour.",
+        "\nThe entries above are this hour's activity, including any that began before \
+it or ran past it. Write two or three sentences describing what was being worked on in \
+this hour.",
     );
 
     Some(Prompt {
@@ -152,21 +158,55 @@ three sentences that just summarize what was done during the day.",
     })
 }
 
+/// The local clock time of a stored stamp, as the person sitting there read it.
+fn local_clock(stamp: &str) -> String {
+    match DateTime::parse_from_rfc3339(stamp) {
+        Ok(when) => when.with_timezone(&Local).format("%H:%M").to_string(),
+        Err(_) => "--:--".to_owned(),
+    }
+}
+
+/// Which local hour a stored stamp falls in.
+fn local_hour(stamp: &str) -> Option<u32> {
+    DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|when| when.with_timezone(&Local).hour())
+}
+
 /// One episode as a line of the prompt.
-fn render_episode(episode: &PublicEpisode) -> String {
-    let clock = episode.start.get(11..16).unwrap_or("--:--").to_owned();
+///
+/// Times are local, because the hour in the heading is local. Stamps are stored in UTC
+/// and the clock used to be sliced straight out of the string, which put the heading and
+/// the entries under it in different time zones: an hour headed 17:00 listed its entries
+/// at 12:25. Handed that contradiction a model either reported the UTC times as though
+/// they were the truth or refused the hour outright, saying the log did not cover the
+/// window it had been asked about — which is what made the late hours of a day useless.
+fn render_episode(episode: &PublicEpisode, hour: u32) -> String {
+    let clock = local_clock(&episode.start);
     let spent = human_duration(episode.active_ms);
+
+    // An episode is listed under every hour it overlapped, so one that began earlier or
+    // ran on carries a start time outside this hour and an active total that is not all
+    // this hour's. Both are said plainly; left bare they read as entries that do not
+    // belong to the hour they are filed under.
+    let when = if local_hour(&episode.start) != Some(hour) {
+        format!("{clock}, began before this hour ({spent} in all)")
+    } else if local_hour(&episode.end) != Some(hour) {
+        format!("{clock}, runs past this hour ({spent} in all)")
+    } else {
+        format!("{clock} ({spent})")
+    };
 
     if episode.is_private {
         return format!(
-            "- {clock} ({spent}) {} — private session, nothing recorded\n",
+            "- {when} {} — private session, nothing recorded\n",
             episode.app
         );
     }
 
     let mut line = match &episode.title {
-        Some(title) => format!("- {clock} ({spent}) {}: {title}\n", episode.app),
-        None => format!("- {clock} ({spent}) {}\n", episode.app),
+        Some(title) => format!("- {when} {}: {title}\n", episode.app),
+        None => format!("- {when} {}\n", episode.app),
     };
     if !episode.urls.is_empty() {
         line.push_str(&format!("    visited: {}\n", episode.urls.join(", ")));
@@ -189,10 +229,27 @@ fn render_episode(episode: &PublicEpisode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
     use oh_processing::rollup::AppUsage;
 
     fn date() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 8, 22).unwrap()
+    }
+
+    /// A stored stamp — which is UTC — for a local wall-clock time on the test's date.
+    ///
+    /// Built through the local zone rather than written as a UTC literal so these tests
+    /// mean the same thing wherever they run. The prompt files an episode by the local
+    /// hour it falls in, so a fixed literal lands in a different hour on every machine,
+    /// and a test written that way passes in London and fails in Delhi.
+    fn at(hour: u32, minute: u32) -> String {
+        let naive = date().and_hms_opt(hour, minute, 0).unwrap();
+        Local
+            .from_local_datetime(&naive)
+            .earliest()
+            .expect("a wall-clock time the local zone actually has")
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     }
 
     fn episode(app: &str, title: Option<&str>, active_ms: i64) -> Episode {
@@ -206,8 +263,8 @@ mod tests {
             urls: Vec::new(),
             documents: Vec::new(),
             visible_text: Vec::new(),
-            start: "2026-08-22T09:05:00.000Z".into(),
-            end: "2026-08-22T09:35:00.000Z".into(),
+            start: at(9, 5),
+            end: at(9, 35),
             duration_ms: 1_800_000,
             active_ms,
             event_count: 4,
@@ -287,6 +344,43 @@ mod tests {
         assert!(prompt.user.contains("private session, nothing recorded"));
         assert!(!prompt.user.contains("A secret page"), "{}", prompt.user);
         assert!(prompt.system.contains("never guess what they contained"));
+    }
+
+    /// The defect this guards against made the late hours of a real day unusable. The
+    /// heading is built from the local hour and the entries were sliced out of the UTC
+    /// stamp, so an hour headed 20:00 listed entries at 15:04 and the model answered
+    /// "these fall outside the requested time window" instead of summarizing it.
+    #[test]
+    fn the_entries_are_clocked_in_the_same_zone_as_the_heading() {
+        let one = episode("Visual Studio Code", Some("collector.rs"), 900_000);
+        let prompt = hour_prompt(date(), &hour(900_000, &[&one.id]), &[&one]).unwrap();
+
+        assert!(prompt.user.contains("09:00 and 09:59"), "{}", prompt.user);
+        assert!(prompt.user.contains("- 09:05 "), "{}", prompt.user);
+    }
+
+    #[test]
+    fn an_episode_that_outlasts_the_hour_says_so_rather_than_looking_misfiled() {
+        // Runs 09:45 to 10:20, so the 09:00 hour holds only part of it.
+        let mut one = episode("Google Chrome", Some("problems.pdf"), 2_100_000);
+        one.start = at(9, 45);
+        one.end = at(10, 20);
+        let prompt = hour_prompt(date(), &hour(900_000, &[&one.id]), &[&one]).unwrap();
+        assert!(
+            prompt.user.contains("runs past this hour"),
+            "{}",
+            prompt.user
+        );
+
+        // And the same episode seen from the 10:00 hour it ran into.
+        let mut later = hour(900_000, &[&one.id]);
+        later.hour = 10;
+        let prompt = hour_prompt(date(), &later, &[&one]).unwrap();
+        assert!(
+            prompt.user.contains("began before this hour"),
+            "{}",
+            prompt.user
+        );
     }
 
     #[test]

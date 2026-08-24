@@ -481,16 +481,21 @@ fn is_stale(written: &HourSummary, hour: &oh_processing::rollup::HourlyRollup) -
 
 /// Where `llama-server` is, if it can be found at all.
 ///
-/// A path the user set wins over the search, and a path that is no longer a file is
-/// ignored rather than handed to the spawner, so a server that has been moved reads as
-/// missing here instead of as a failure to start later. Nothing ships the binary, so on
-/// most machines the search finds nothing and this setting is the only way local
-/// summaries can work at all.
+/// A path the user set wins over everything else, and a path that is no longer a file
+/// is ignored rather than handed to the spawner, so a server that has been moved reads
+/// as missing here instead of as a failure to start later. Failing that, the copy this
+/// application fetched for itself (AD-30), and only then the search beside the
+/// executable and on `PATH` for somebody who put one there by hand.
+///
+/// The fetched copy has to be checked here and not only where the settings page draws
+/// its status. It was added to the status alone at first, which read as fetched and
+/// ready in Settings while readiness went on saying it had not been fetched yet and
+/// every summary went on failing — the download worked and nothing consumed it.
 fn local_binary(inference: &oh_core::InferenceConfig) -> Option<std::path::PathBuf> {
     if let Some(chosen) = inference.local_server_path.as_ref() {
         return chosen.is_file().then(|| chosen.clone());
     }
-    crate::llama::find_binary(None)
+    crate::runtime::installed().or_else(|| crate::llama::find_binary(None))
 }
 
 /// How long a cloud provider is given to answer.

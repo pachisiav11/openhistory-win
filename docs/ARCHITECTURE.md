@@ -938,3 +938,41 @@ worst moment, in front of a user who cannot tell why. The `#[ignore]`d
 The archive's on-disk size (`APPROXIMATE_BYTES`) is a measured constant rather than
 something asked of the server before the first byte arrives, so the settings page can
 say what is about to be fetched before the download has told it anything.
+
+## AD-31: The hour in the heading and the clock on its entries are the same clock
+
+**Decision.** `render_episode` converts the stored stamp to local time before printing
+it, and an episode that began before the hour or ran past it says so on its own line
+along with the fact that its active total is not all this hour's. The hourly instruction
+states plainly that the entries are this hour's activity, including those that overlap
+its edges.
+
+**Why.** Episodes are stored in UTC (`stamp` in `oh-processing::episode`) and the hourly
+heading is built from `HourlyRollup::hour`, which is local. The clock was sliced straight
+out of the stamp string — `episode.start.get(11..16)` — so the two disagreed by the
+machine's offset. On a machine at UTC+5:30 an hour headed "between 20:00 and 20:59"
+listed its entries at 15:04, and the model did one of two things: reported the UTC times
+as though they were the truth, or refused the hour outright — "the log appears to contain
+data from an earlier time of day than what was requested." Both are correct readings of a
+prompt that contradicts itself. The bug was invisible in the tests because every fixture
+wrote a UTC literal and asserted on the heading, which is why the fixtures now build
+their stamps through the local zone: a test written with a fixed literal passes in London
+and fails in Delhi.
+
+The overlap note is the other half. An episode is listed under every hour it touched, so
+even with the zones agreed, one that started at 20:58 and ran on appears under the 21:00
+hour with a start time that is not in it. Unexplained, that reads as a misfiled entry.
+
+**Consequence.** `SYSTEM` also now says that window controls, menu and toolbar labels and
+other interface furniture are not activity, and that an entry carrying nothing but an
+application name should produce one short clause rather than a padded sentence. AD-30's
+"every sentence must carry something from the log" pushed in the opposite direction: with
+a thin hour and nothing else to name, the model reached for what the accessibility tree
+had captured and wrote that the window "was visible on screen with minimize and restore
+controls available." A rule that demands substance in every sentence has to be paired
+with one that says what does not count as substance, or it manufactures filler out of
+whatever is nearest.
+
+The day prompt's target is a word count (about 300) rather than only a sentence range,
+because a range of sentences bounds structure and not length; the first version of AD-30
+produced ~600 words that restated the same file and figure across several sentences.
