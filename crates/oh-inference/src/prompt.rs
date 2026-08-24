@@ -131,23 +131,24 @@ pub fn day_prompt(date: NaiveDate, rollup: &DailyRollup, hours: &[HourSummary]) 
     }
 
     user.push_str(
-        "\nWrite a detailed account of this day in three paragraphs, twelve to \
-eighteen sentences in all. First: the pieces of work themselves, each one named — the \
-files, documents, pages and topics it involved, and roughly how long it took. Second: \
-the order the day ran in, where the work changed direction, and which of those changes \
-were returns to something from earlier. Third: what the shape of the time says — the \
-longest unbroken stretch, where the attention scattered, and anything begun and not \
-returned to. Name something concrete from the log in every sentence, and where an \
-hour holds little, write less about it rather than padding it out.\n\n\
-After those three paragraphs, leave a blank line and add one more, separate from and \
-outside the detailed account above: four to five sentences that just summarize what \
-was done during the day.",
+        "\nWrite an account of this day in three paragraphs, then a fourth. Target \
+about 300 words in total — that is a target to stay close to, not a floor to fill. \
+First: the pieces of work themselves, each one named — the files, documents, pages \
+and topics it involved, and roughly how long each took. Second: the order the day \
+ran in and where the work changed direction. Third: what the shape of the time says \
+— the longest unbroken stretch and anything begun and not returned to. Name \
+something concrete from the log in every sentence, but name each file, topic or \
+figure once; do not return to something already covered. Where an hour holds \
+little, write less about it rather than padding it out.\n\n\
+After those three paragraphs, leave a blank line and add a fourth, separate from \
+and outside the detailed account above, within the same 300-word target: two or \
+three sentences that just summarize what was done during the day.",
     );
 
     Some(Prompt {
         system: SYSTEM.to_owned(),
         user,
-        max_tokens: 1800,
+        max_tokens: 700,
     })
 }
 
