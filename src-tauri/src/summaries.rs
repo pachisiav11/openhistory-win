@@ -223,9 +223,22 @@ pub fn remove_model(id: String, app: State<'_, AppState>) -> Result<bool, String
 #[tauri::command]
 pub fn use_local_model(id: String, app: State<'_, AppState>) -> Result<Config, String> {
     let mut config = app.config();
-    resolve_local_model(&mut config, Some(&id))?;
+    select_local_model(&mut config, &id)?;
     app.apply(config.clone())?;
     Ok(config)
+}
+
+/// Point the settings at a model on this machine.
+///
+/// Choosing the model also selects the local provider, exactly as choosing a hosted
+/// model selects the vendor that runs it. Leaving the provider alone meant picking a
+/// model here set the identifier and the path and went on sending every summary to
+/// whichever cloud was selected before, while the settings page showed the local model
+/// as chosen. Split out from the command so the pairing can be tested without a window.
+pub fn select_local_model(config: &mut Config, id: &str) -> Result<(), String> {
+    resolve_local_model(config, Some(id))?;
+    config.inference.provider = InferenceProvider::Local;
+    Ok(())
 }
 
 /// Ask the user where `llama-server` is, and remember the answer.
@@ -395,4 +408,34 @@ fn prepare(date: &str, app: &State<'_, AppState>) -> Result<(Config, DayReport),
     let config = app.config();
     let report = app.processor.lock().day(date).map_err(to_message)?;
     Ok((config, report))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The defect this guards against shipped: a config with `localModelId` and
+    /// `localModelPath` both filled in and `provider` still naming a cloud vendor, so
+    /// the summaries kept going to the cloud and the radio button would not move.
+    #[test]
+    fn choosing_a_model_on_this_machine_also_leaves_the_cloud() {
+        let mut config = Config::default();
+        config.inference.provider = InferenceProvider::Anthropic;
+
+        select_local_model(&mut config, "gemma-4-e2b-qat").expect("a catalog model");
+
+        assert_eq!(config.inference.provider, InferenceProvider::Local);
+        assert_eq!(
+            config.inference.local_model_id.as_deref(),
+            Some("gemma-4-e2b-qat")
+        );
+        assert!(config.inference.local_model_path.is_some());
+    }
+
+    #[test]
+    fn a_model_that_is_not_in_the_catalog_is_refused() {
+        let mut config = Config::default();
+        assert!(select_local_model(&mut config, "not-a-model").is_err());
+        assert_eq!(config.inference.provider, InferenceProvider::Disabled);
+    }
 }

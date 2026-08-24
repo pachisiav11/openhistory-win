@@ -818,6 +818,16 @@ and then explains what to download, rather than refusing the click. A choice tha
 does nothing is worse than a choice that admits it is not finished, and the first version
 of this did exactly that.
 
+Choosing a model on this machine selects the local provider, the way choosing a hosted
+model selects the vendor that runs it. `use_local_model` used to set the identifier and
+the path and leave `provider` alone, which the one-dropdown design hid: the list showed
+the local model as chosen while every summary still went to whichever cloud was selected
+before. The three-way radio made it visible — it read the provider, saw a cloud vendor,
+and snapped back — and the installed config proved it, carrying `localModelId`,
+`localModelPath` and `provider: anthropic` together. The pairing is now a function with a
+test rather than a line inside a command, because the cloud side of it has always been
+right and the two have to stay symmetric.
+
 A path that has been moved or deleted reads as missing rather than being handed to the
 spawner, so the failure is reported where it can be acted on instead of as a server that
 would not start.
