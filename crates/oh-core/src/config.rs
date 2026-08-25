@@ -32,6 +32,21 @@ pub const DEFAULT_EXCLUDED: &[&str] = &[
     "lsass",
 ];
 
+/// Applications whose windows are read in depth out of the box.
+///
+/// The ordinary read stops at the tab strip and the headings, which is enough to
+/// recognise most windows and useless for the few a person actually reads and writes
+/// in: a chat, a rendered document, a manuscript. These are named by executable stem or
+/// by display name, whichever the user is likelier to recognise — the Markdown Renderer
+/// ships as `app.exe`, which is no name at all.
+pub const DEFAULT_DEEP_READ: &[&str] = &[
+    "claude",
+    "markdown renderer",
+    "winword",
+    "microsoft word",
+    "obsidian",
+];
+
 /// What the collector will and will not record.
 ///
 /// This is the settings half of the collector's behaviour, kept in `oh-core` so the
@@ -54,6 +69,13 @@ pub struct RecordingConfig {
     /// person can want to know which document they were in without wanting the words
     /// on the screen written down.
     pub capture_visible_text: bool,
+    /// Applications to read properly rather than glance at, by executable stem or by
+    /// display name. See [`DEFAULT_DEEP_READ`].
+    ///
+    /// A deeper read costs time on the collector thread and writes down more of what
+    /// was on screen, so it is a list a person opts into a name at a time rather than a
+    /// switch that applies to everything they run.
+    pub deep_read_apps: Vec<String>,
 }
 
 impl Default for RecordingConfig {
@@ -63,6 +85,7 @@ impl Default for RecordingConfig {
             capture_urls: true,
             capture_documents: true,
             capture_visible_text: true,
+            deep_read_apps: DEFAULT_DEEP_READ.iter().map(|s| (*s).to_owned()).collect(),
         }
     }
 }
@@ -74,6 +97,18 @@ impl RecordingConfig {
         self.excluded_apps
             .iter()
             .any(|excluded| excluded.eq_ignore_ascii_case(&lowered))
+    }
+
+    /// True when an application's windows are worth reading in depth.
+    ///
+    /// Matched against both names an application has, because neither is reliable on
+    /// its own: `winword` means nothing to a person and `Markdown Renderer` is not what
+    /// its executable is called.
+    pub fn reads_deeply(&self, exe_stem: &str, display_name: &str) -> bool {
+        self.capture_visible_text
+            && self.deep_read_apps.iter().any(|wanted| {
+                wanted.eq_ignore_ascii_case(exe_stem) || wanted.eq_ignore_ascii_case(display_name)
+            })
     }
 
     pub fn exclude(&mut self, exe_stem: impl Into<String>) {
@@ -441,6 +476,25 @@ mod tests {
         assert!(config.excludes("KeePassXC"));
         assert!(!config.excludes("Code"));
         assert!(!config.excludes("chrome"));
+    }
+
+    #[test]
+    fn the_applications_worth_reading_properly_are_matched_by_either_name() {
+        let config = RecordingConfig::default();
+        // An executable stem nobody would recognise, and a display name whose
+        // executable is called `app`.
+        assert!(config.reads_deeply("WINWORD", "Microsoft Word"));
+        assert!(config.reads_deeply("app", "Markdown Renderer"));
+        assert!(config.reads_deeply("claude", "Claude"));
+        assert!(!config.reads_deeply("chrome", "Google Chrome"));
+
+        // Turning screen text off turns the deeper read off with it: there is nothing
+        // for it to be deeper about.
+        let quiet = RecordingConfig {
+            capture_visible_text: false,
+            ..RecordingConfig::default()
+        };
+        assert!(!quiet.reads_deeply("WINWORD", "Microsoft Word"));
     }
 
     #[test]

@@ -33,10 +33,10 @@ pub const MAX_DOCUMENTS: usize = 5;
 
 /// The most lines of interface text to carry on one episode.
 ///
-/// Smaller than what the episode keeps. A model writing two sentences about an hour
-/// needs enough to recognise the window, not a transcript of it, and every line sent
-/// is a line the person did not separately agree to.
-pub const MAX_VISIBLE_TEXT: usize = 8;
+/// Smaller than what the episode keeps. A model writing about an hour needs enough to
+/// say what was in the window, not a transcript of it, and every line sent is a line
+/// the person did not separately agree to.
+pub const MAX_VISIBLE_TEXT: usize = 14;
 
 /// An episode reduced to what may be shown outside the application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

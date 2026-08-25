@@ -338,6 +338,7 @@ export function installBrowserMocks(): void {
       captureUrls: true,
       captureDocuments: true,
       captureVisibleText: true,
+      deepReadApps: ["claude", "markdown renderer", "winword", "microsoft word", "obsidian"],
     },
     inference: {
       provider: "disabled",

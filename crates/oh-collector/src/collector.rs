@@ -41,7 +41,7 @@ use windows::core::{PCWSTR, w};
 
 use crate::browser::Browser;
 use crate::config::CollectorConfig;
-use crate::uia::{Automation, ComApartment};
+use crate::uia::{Automation, ComApartment, ReadBudget};
 use crate::win;
 
 /// Anything that can receive events. The collector calls this on its own thread, so
@@ -337,7 +337,8 @@ impl CollectorState {
             if let Some(title) = title.clone() {
                 event = event.with_window_title(title);
             }
-            let (document, lines) = self.read_window(hwnd, title.as_deref());
+            let (document, lines) =
+                self.read_window(hwnd, title.as_deref(), stem, &application.name);
             if let Some(document) = document {
                 event = event.with_document(document);
             }
@@ -369,6 +370,8 @@ impl CollectorState {
         &mut self,
         hwnd: HWND,
         window_title: Option<&str>,
+        stem: &str,
+        display_name: &str,
     ) -> (Option<DocumentObservation>, Vec<String>) {
         let Some(automation) = self.automation.as_ref() else {
             return (None, Vec::new());
@@ -381,7 +384,18 @@ impl CollectorState {
         });
 
         let want_text = self.config.capture_visible_text && due;
-        let reading = automation.read_window(hwnd, self.config.capture_documents, want_text);
+        let budget = if self.config.reads_deeply(stem, display_name) {
+            ReadBudget::STUDY
+        } else {
+            ReadBudget::GLANCE
+        };
+        let reading = automation.read_window(
+            hwnd,
+            self.config.capture_documents,
+            want_text,
+            budget,
+            window_title,
+        );
 
         // A read that came back with nothing but the window's own name did not observe
         // the window, so it must not start the clock that suppresses the next one.

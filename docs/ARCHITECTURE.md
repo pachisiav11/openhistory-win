@@ -1102,3 +1102,61 @@ which is where the failure can be described once. The plugin has no commands, so
 there is no capability to grant. Launching from the tray, a shortcut or the installer
 now raises the running window instead of starting a rival, which is also what somebody
 double-clicking the icon expected in the first place.
+
+## AD-36: A window is glanced at, and a few named windows are read
+
+**Decision.** The visible-text read has two budgets. Every application gets the glance
+it always had — four named levels, eighty elements, 120 ms, twelve lines. The
+applications named in `recording.deepReadApps` get a study: eight named levels, nine
+hundred elements, 500 ms, twenty-eight lines, the contents of any editing surface, and
+a second walk seeded from the window's own child windows. Whatever either walk
+collects is labelled `Writing`, `Content` or `Furniture`, and the line budget is filled
+in that order.
+
+**Why.** The read was returning window furniture and nothing else. A Word window came
+back as `["final crit - Word", "DropShadowTop", "MsoDockTop", "MsoDockBottom"]` and a
+Claude window as `["Claude", "Minimize", "Restore", "Close", "Menu", …]`. Three
+separate causes, each of which had to be removed before the next one showed:
+
+Breadth-first order reaches the frame first, and the frame is enormous — a Word ribbon
+publishes several hundred named controls. Ordering the budget by control type rather
+than by tree position fixes that, and it has to be by control type: a chat window's
+sidebar of past conversations stands between the frame and the conversation and is
+content by any test that does not ask what the element actually is. Hence three tiers
+rather than two, with `Text`, `Document` and `Edit` above everything else.
+
+Depth and breadth were tuned for recognising a window, not reading one. A chat message
+sits six named levels down behind a sidebar several hundred elements wide; the eighty
+elements a glance allows were spent long before the walk arrived. This is why the wider
+budget is a list of applications rather than a switch. It costs up to half a second on
+the collector thread, which pumps the WinEvent hooks, and it writes down more of what
+was on screen — neither of which should apply to everything a person runs.
+
+An editor's name is not its text. Word calls its editing surface "Page 1 content" and
+publishes the page through a text range; a plain text box publishes it as a value. Both
+are read, and an element whose value is a location is refused outright — a Chromium
+document answers with its address as a value and its entire window as a range, in
+document order, which is the navigation and then the sidebar and then, eventually, the
+conversation. Only `Document` and `Edit` are asked at all: a `Text` element's name
+already is its text, and asking one for a range made a Claude read a hundred copies of
+the same page.
+
+An embedded browser is a window of its own. A Tauri or WebView2 application publishes
+a node called "… - Web content" with nothing under it until something asks that child
+window directly, at which point Chromium builds the tree. The second walk exists for
+that, and runs only after the window's own tree is exhausted: seeding it up front cost
+an Electron window its entire clock on trees it had already published.
+
+**Consequence.** A Word window now yields the essay's opening paragraphs and its
+footnotes, a Claude window the messages in the conversation, and a Markdown Renderer
+window the document and the recent-file list. Summaries can say what a file called
+`final crit` was about, which is the difference between naming a day's work and
+describing it. The cost is real: more of what was on screen is written to the event
+log for these applications, an episode carries thirty-six lines rather than twenty, and
+fourteen rather than eight reach a model. It is a list a person adds a name to, and
+`captureVisibleText` still turns the whole of it off.
+
+A line that names a file location is now dropped from screen text entirely. An Electron
+window publishes the `file://` address of its own bundle as its document's name, which
+put an executable path into the timeline through the one field that had no guard
+against it.

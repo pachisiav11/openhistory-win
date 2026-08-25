@@ -42,7 +42,10 @@ pub const MAX_DOCUMENTS: usize = 8;
 /// The collector already bounds each observation. This bounds the accumulation of
 /// them, which is the number that grows with the length of the episode rather than
 /// with the size of the window.
-pub const MAX_VISIBLE_TEXT: usize = 20;
+///
+/// Wide enough to hold more than one observation of a window that is read properly: an
+/// hour in a manuscript is worth more than the first screen of it.
+pub const MAX_VISIBLE_TEXT: usize = 36;
 
 /// A continuous stretch of work in one application.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

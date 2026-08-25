@@ -47,13 +47,13 @@ one deliberately not. Everything below was run and passed on this tree:
   now points at one in Settings and the path is stored as `inference.local_server_path`.
   Bundling the binary, or offering to download a llama.cpp release the way the model
   catalog already downloads GGUFs, is the obvious next step and was not taken here.
-- **The visible-text read is dominated by window furniture.** A Chrome window now yields
-  `["… - Google Chrome", "Minimize", "Maximize", "Close", "New Tab", "Back", "Forward",
-  "Reload", "You", "Chrome", "Tab search", "File"]` — twelve lines, of which perhaps four
-  are worth summarizing, and the page's own text is not among them. Breadth-first order
-  reaches the frame before the content. Worth trying: skip control types that are pure
-  frame, or prefer `Text` and `Document` elements when the line budget is contended. The
-  browser gate will show the result immediately.
+- ~~**The visible-text read is dominated by window furniture.**~~ Fixed on 2026-08-25.
+  Lines are now labelled `Writing`, `Content` or `Furniture` from the control type and
+  from whether the element sits inside a toolbar or menu, and the budget is filled in
+  that order. Named applications additionally get a wider walk that reads editing
+  surfaces by value or text range, and that starts a second walk from the window's own
+  child windows once its tree is exhausted, which is what an embedded browser needs
+  before it will publish a page at all. See `recording.deepReadApps` and AD-36.
 - **A browser page's text is still read before the page has loaded.** The read happens on
   the window-change event; the title change that follows the page load is inside the
   thirty-second interval, so the loaded page is never read. Keying the interval on the

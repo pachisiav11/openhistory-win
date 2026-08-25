@@ -106,6 +106,12 @@ export interface RecordingConfig {
   captureDocuments: boolean;
   /** Record a bounded, redacted sample of the text a window is showing. */
   captureVisibleText: boolean;
+  /**
+   * Applications read properly rather than glanced at, by executable stem or display
+   * name. A deeper read reaches the document and the conversation rather than the tab
+   * strip, and costs more time on the collector thread.
+   */
+  deepReadApps: string[];
 }
 
 export type InferenceProvider = "disabled" | "anthropic" | "openai" | "google" | "local";

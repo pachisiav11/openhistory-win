@@ -12,17 +12,61 @@
 //! document's whole body in the event log, which is a copy of the document rather
 //! than a record of having worked on it.
 //!
+//! The budget is also contended, and who wins the contention is the fourth rule. A
+//! window offers far more furniture than content — a Word window publishes several
+//! hundred ribbon controls and one document — so lines arrive labelled with where they
+//! came from and are served in that order. Filling a twelve-line budget in tree order
+//! is what produced `["Minimize", "Restore", "Close", "Menu", …]` from a window full of
+//! writing, and serving mere content first was still not enough: a chat window's
+//! sidebar of past conversations stands between the frame and the conversation, and it
+//! is content by any test that does not ask what the element actually is.
+//!
 //! Everything here is a pure function on strings, so the rules are testable without a
 //! desktop, which is the reason they live apart from the UIAutomation calls.
-
-/// The most lines one observation may carry.
-pub const MAX_LINES: usize = 12;
 
 /// The most characters one line may carry.
 pub const MAX_LINE_CHARS: usize = 120;
 
-/// The most characters one observation may carry across every line.
-pub const MAX_TOTAL_CHARS: usize = 1_000;
+/// Where a line came from, in the order it deserves the budget.
+///
+/// The distinction is made by the walk that collects them, from the control type and
+/// from whether the element sits inside a toolbar or menu. It is kept here because it
+/// only matters when the budget runs out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Surface {
+    /// Prose: the body of a document, a message in a conversation, the contents of a
+    /// text box. What somebody actually read or wrote.
+    Writing,
+    /// Named things around the writing: tabs, list entries, headings, panes.
+    Content,
+    /// The frame around all of it: buttons, menus, ribbons, window controls.
+    Furniture,
+}
+
+/// How much of what a window is showing may be written down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextBudget {
+    pub lines: usize,
+    pub total_chars: usize,
+}
+
+impl TextBudget {
+    /// Enough to recognise a window by. What every application gets.
+    pub const GLANCE: TextBudget = TextBudget {
+        lines: 12,
+        total_chars: 1_000,
+    };
+
+    /// Enough to say what was in the window. What the applications named in
+    /// `recording.deepReadApps` get.
+    ///
+    /// Wider, not unbounded: a page of a document is roughly two thousand characters,
+    /// so this is still an excerpt of one screen rather than a copy of a file.
+    pub const STUDY: TextBudget = TextBudget {
+        lines: 28,
+        total_chars: 2_400,
+    };
+}
 
 /// Shortest line worth keeping. Single characters are toolbar glyphs and separators.
 const MIN_LINE_CHARS: usize = 2;
@@ -58,28 +102,48 @@ const SECRET_PREFIXES: &[&str] = &[
 
 /// Reduce raw accessible names to the lines that may be recorded.
 ///
+/// Writing is taken before content and content before furniture, so a budget that runs
+/// out runs out on the buttons. Within each of the three, tree order is kept.
+///
 /// Duplicates are dropped: an interface repeats the same label in a menu, a toolbar
-/// and a tooltip, and recording it three times spends the budget on nothing.
-pub fn redact_lines(raw: impl IntoIterator<Item = String>) -> Vec<String> {
+/// and a tooltip, and recording it three times spends the budget on nothing. The
+/// window title is dropped for the same reason — it is already recorded, as the title.
+pub fn redact_lines(
+    raw: impl IntoIterator<Item = (Surface, String)>,
+    budget: TextBudget,
+    window_title: Option<&str>,
+) -> Vec<String> {
+    let raw: Vec<(Surface, String)> = raw.into_iter().collect();
+    let title = window_title.map(collapse_whitespace);
+
     let mut kept: Vec<String> = Vec::new();
     let mut total = 0usize;
 
-    for line in raw {
-        if kept.len() == MAX_LINES {
-            break;
+    for wanted in [Surface::Writing, Surface::Content, Surface::Furniture] {
+        for line in raw
+            .iter()
+            .filter(|(surface, _)| *surface == wanted)
+            .map(|(_, line)| line)
+        {
+            if kept.len() == budget.lines {
+                break;
+            }
+            let Some(line) = redact_line(line) else {
+                continue;
+            };
+            if title.as_deref().is_some_and(|title| title == line) {
+                continue;
+            }
+            if kept.iter().any(|existing| existing == &line) {
+                continue;
+            }
+            let length = line.chars().count();
+            if total + length > budget.total_chars {
+                continue;
+            }
+            total += length;
+            kept.push(line);
         }
-        let Some(line) = redact_line(&line) else {
-            continue;
-        };
-        if kept.iter().any(|existing| existing == &line) {
-            continue;
-        }
-        let length = line.chars().count();
-        if total + length > MAX_TOTAL_CHARS {
-            continue;
-        }
-        total += length;
-        kept.push(line);
     }
     kept
 }
@@ -90,10 +154,29 @@ pub fn redact_line(raw: &str) -> Option<String> {
     if collapsed.chars().count() < MIN_LINE_CHARS {
         return None;
     }
-    if looks_secret(&collapsed) {
+    if looks_secret(&collapsed) || names_a_location(&collapsed) {
         return None;
     }
     Some(truncate(&mask_digit_runs(&collapsed)))
+}
+
+/// True when a line is where something lives rather than anything anybody read.
+///
+/// A file location names the machine's layout, which is the one thing this application
+/// promises never to carry out of the event log. An Electron window publishes the
+/// `file://` address of its own bundle as the name of its document element, so without
+/// this the executable path reaches the timeline through the screen-text field after
+/// being kept out of every other one.
+fn names_a_location(line: &str) -> bool {
+    let lowered = line.to_ascii_lowercase();
+    if lowered.starts_with("file:") || lowered.starts_with(r"\\") {
+        return true;
+    }
+    let bytes = line.as_bytes();
+    bytes.len() > 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
 }
 
 /// Accessible names arrive with newlines, tabs and runs of spaces in them. One line
@@ -184,7 +267,11 @@ mod tests {
     use super::*;
 
     fn lines(raw: &[&str]) -> Vec<String> {
-        redact_lines(raw.iter().map(|s| (*s).to_owned()))
+        redact_lines(
+            raw.iter().map(|s| (Surface::Content, (*s).to_owned())),
+            TextBudget::GLANCE,
+            None,
+        )
     }
 
     #[test]
@@ -277,20 +364,21 @@ mod tests {
     #[test]
     fn no_more_lines_than_the_budget_allows() {
         let many: Vec<String> = (0..100).map(|n| format!("Line number {n}")).collect();
-        assert_eq!(redact_lines(many).len(), MAX_LINES);
+        let kept: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert_eq!(lines(&kept).len(), TextBudget::GLANCE.lines);
     }
 
     #[test]
     fn the_whole_observation_is_capped_however_the_lines_divide() {
         // Twelve lines would fit by count; by length they must not.
-        let heavy: Vec<String> = (0..MAX_LINES)
+        let heavy: Vec<String> = (0..TextBudget::GLANCE.lines)
             .map(|n| format!("Section {n}: {}", "long heading ".repeat(8)))
             .collect();
-        let kept = redact_lines(heavy);
+        let kept = lines(&heavy.iter().map(String::as_str).collect::<Vec<_>>());
 
         let total: usize = kept.iter().map(|line| line.chars().count()).sum();
         assert!(
-            total <= MAX_TOTAL_CHARS,
+            total <= TextBudget::GLANCE.total_chars,
             "{total} characters is over budget"
         );
         assert!(!kept.is_empty(), "the budget must not reject everything");
@@ -300,12 +388,70 @@ mod tests {
     fn a_document_body_cannot_be_copied_through_this() {
         // One enormous element, as an editor's text area reports itself.
         let body = "The quick brown fox. ".repeat(5_000);
-        let kept = redact_lines([body]);
+        let kept = lines(&[&body]);
 
         let total: usize = kept.iter().map(|line| line.chars().count()).sum();
         assert!(
             total <= MAX_LINE_CHARS,
             "{total} characters reached the log"
         );
+    }
+
+    /// The failure this exists for: a Word window publishes several hundred ribbon
+    /// controls and one document, and reading them in tree order spent the whole
+    /// budget before reaching a word of the writing.
+    #[test]
+    fn content_is_taken_before_the_furniture_around_it() {
+        let mut raw: Vec<(Surface, String)> = (0..30)
+            .map(|n| (Surface::Furniture, format!("Button {n}")))
+            .collect();
+        raw.push((Surface::Content, "Chapter Four: the argument".into()));
+
+        let kept = redact_lines(raw, TextBudget::GLANCE, None);
+        assert_eq!(kept[0], "Chapter Four: the argument");
+        assert_eq!(kept.len(), TextBudget::GLANCE.lines);
+    }
+
+    #[test]
+    fn the_window_title_is_not_recorded_a_second_time() {
+        let kept = redact_lines(
+            [
+                (Surface::Content, "final crit - Word".to_owned()),
+                (Surface::Content, "final crit".to_owned()),
+            ],
+            TextBudget::GLANCE,
+            Some("final crit - Word"),
+        );
+        assert_eq!(kept, vec!["final crit"]);
+    }
+
+    /// An Electron window publishes the `file://` address of its own bundle as the
+    /// name of its document element, which put the executable path into the timeline
+    /// through the one field that had no guard against it.
+    #[test]
+    fn a_line_that_is_a_location_rather_than_something_read_is_dropped() {
+        assert_eq!(
+            redact_line("file:///C:/Program%20Files/WindowsApps/Something/app.asar/main.js"),
+            None
+        );
+        assert_eq!(redact_line(r"C:\Users\someone\Documents\draft.docx"), None);
+        assert_eq!(redact_line(r"\\server\share\report.docx"), None);
+        // An ordinary sentence that merely contains a colon is not a location.
+        assert_eq!(
+            redact_line("Statement of Intent: this essay explores a theme").as_deref(),
+            Some("Statement of Intent: this essay explores a theme")
+        );
+    }
+
+    #[test]
+    fn the_wider_budget_keeps_more_without_becoming_unbounded() {
+        let many: Vec<(Surface, String)> = (0..200)
+            .map(|n| (Surface::Content, format!("Paragraph {n} of the draft")))
+            .collect();
+        let kept = redact_lines(many, TextBudget::STUDY, None);
+
+        assert_eq!(kept.len(), TextBudget::STUDY.lines);
+        let total: usize = kept.iter().map(|line| line.chars().count()).sum();
+        assert!(total <= TextBudget::STUDY.total_chars);
     }
 }

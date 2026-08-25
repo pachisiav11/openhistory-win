@@ -8,7 +8,7 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, MAX_PATH, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, MAX_PATH, WAIT_TIMEOUT};
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
@@ -17,10 +17,10 @@ use windows::Win32::System::Threading::{
     PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    EnumChildWindows, GetClassNameW, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId,
 };
-use windows::core::{HSTRING, PCWSTR, PWSTR};
+use windows::core::{BOOL, HSTRING, PCWSTR, PWSTR};
 
 /// Owns a process handle so it is closed on every path out of a function.
 struct OwnedHandle(HANDLE);
@@ -74,6 +74,36 @@ pub fn window_class(hwnd: HWND) -> Option<String> {
     let mut buffer = [0u16; 256];
     let written = unsafe { GetClassNameW(hwnd, &mut buffer) };
     (written > 0).then(|| wide_to_string(&buffer[..written as usize]))
+}
+
+/// Windows owned by a window, at any level below it.
+///
+/// An embedded browser keeps its page in a window of its own — `WRY_WEBVIEW`,
+/// `Chrome_WidgetWin_1`, `Chrome_RenderWidgetHostHWND` — and builds the page's
+/// accessibility tree only when something asks *that* window for it. Reading the
+/// top-level window therefore reaches a node called "… - Web content" with nothing
+/// under it, which is what a Tauri or WebView2 application looked like: a menu bar and
+/// an empty promise.
+pub fn child_windows(parent: HWND, max: usize) -> Vec<HWND> {
+    let mut found: Vec<HWND> = Vec::new();
+    if max == 0 {
+        return found;
+    }
+
+    let mut state = (&mut found, max);
+    // SAFETY: the callback runs to completion inside this call, so the pointer to
+    // `state` is valid for as long as it is used.
+    let _ =
+        unsafe { EnumChildWindows(Some(parent), Some(gather), LPARAM(&raw mut state as isize)) };
+    found
+}
+
+unsafe extern "system" fn gather(hwnd: HWND, param: LPARAM) -> BOOL {
+    // SAFETY: `param` is the pointer `child_windows` passed to EnumChildWindows.
+    let (found, max) = unsafe { &mut *(param.0 as *mut (&mut Vec<HWND>, usize)) };
+    found.push(hwnd);
+    // Zero ends the enumeration.
+    BOOL(i32::from(found.len() < *max))
 }
 
 /// Process that owns a window.

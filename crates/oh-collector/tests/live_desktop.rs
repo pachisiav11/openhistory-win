@@ -397,7 +397,7 @@ fn reads_what_a_real_window_is_showing() {
         "an absent read must not be an empty list"
     );
     assert!(
-        lines.len() <= oh_collector::text::MAX_LINES,
+        lines.len() <= oh_collector::text::TextBudget::STUDY.lines,
         "the budget was exceeded: {lines:?}"
     );
     for line in lines {

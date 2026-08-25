@@ -19,14 +19,23 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationValuePattern,
-    TreeScope_Children, TreeScope_Descendants, UIA_ControlTypePropertyId,
-    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_ValuePatternId,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern,
+    IUIAutomationValuePattern, TreeScope_Children, TreeScope_Descendants, UIA_ButtonControlTypeId,
+    UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId,
+    UIA_ControlTypePropertyId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+    UIA_HeaderControlTypeId, UIA_HeaderItemControlTypeId, UIA_ImageControlTypeId,
+    UIA_MenuBarControlTypeId, UIA_MenuControlTypeId, UIA_MenuItemControlTypeId,
+    UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
+    UIA_ScrollBarControlTypeId, UIA_SeparatorControlTypeId, UIA_SliderControlTypeId,
+    UIA_SpinnerControlTypeId, UIA_SplitButtonControlTypeId, UIA_StatusBarControlTypeId,
+    UIA_TextControlTypeId, UIA_TextPatternId, UIA_ThumbControlTypeId, UIA_TitleBarControlTypeId,
+    UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_ValuePatternId,
+    UIA_WindowControlTypeId,
 };
 use windows::core::Interface;
 
 use crate::browser::Browser;
-use crate::text;
+use crate::text::{self, Surface, TextBudget};
 
 /// How many `Edit` elements to inspect before giving up on finding the address bar.
 ///
@@ -39,31 +48,72 @@ const MAX_EDIT_CANDIDATES: i32 = 12;
 /// private-browsing marker. A browser window has a handful.
 const MAX_WINDOW_CHILDREN: i32 = 8;
 
-/// How many elements a visible-text read may look at.
+/// The most characters of an editing surface's value to look at.
 ///
-/// Every step is a cross-process call, so this is a time budget as much as a size
-/// one. Eighty elements reaches the tab strip, the headings and the name of the thing
-/// being edited, which is what makes a summary specific; going further reaches the
-/// body of the document, which is not this application's business and would cost
-/// noticeable time on every window change.
-const MAX_TEXT_ELEMENTS: usize = 80;
+/// A `Value` on a document element is the writing itself, and Word will hand over a
+/// whole page of it. Cutting here bounds the work of splitting it into lines; the text
+/// budget then decides how much of the result is written down.
+const MAX_VALUE_CHARS: usize = 4_000;
 
-/// How many *named* levels of the tree a visible-text read may go down.
+/// How far one read of a window may go.
 ///
-/// Unnamed containers are not counted; see the walk in `read_window`. Four levels of
-/// content is the tab strip, a heading and the document's name — not its body.
-const MAX_TEXT_DEPTH: u32 = 4;
+/// Every step is a cross-process call, so each of these is a time budget as much as a
+/// size one, and the clock is what makes the cost predictable rather than merely
+/// bounded: the collector thread pumps the WinEvent hooks, so time spent inside an
+/// automation call is time the next window change waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadBudget {
+    /// How many *named* levels of the tree to descend. Unnamed containers are not
+    /// counted; see the walk in `read_window`.
+    pub depth: u32,
+    /// How many elements to visit.
+    pub elements: usize,
+    /// How many children of any one element to queue.
+    pub children: i32,
+    /// How long the whole read may take, whatever the other budgets allow.
+    pub time: Duration,
+    /// How much of what it finds may be written down.
+    pub text: TextBudget,
+    /// Read the value of an editing surface as well as its name.
+    ///
+    /// The name of Word's editing surface is "Page 1 content". The value is the page.
+    pub values: bool,
+    /// How many of the window's own child windows to start a walk from as well.
+    ///
+    /// Zero for an ordinary read. See [`crate::win::child_windows`]: an embedded
+    /// browser answers for its page only when its own window is asked.
+    pub child_windows: usize,
+}
 
-/// How many children of any one element a visible-text read may queue.
-const MAX_TEXT_CHILDREN: i32 = 24;
+impl ReadBudget {
+    /// What every application gets: the tab strip, the headings and the name of the
+    /// thing being edited, which is what makes a summary specific.
+    pub const GLANCE: ReadBudget = ReadBudget {
+        depth: 4,
+        elements: 80,
+        children: 24,
+        time: Duration::from_millis(120),
+        text: TextBudget::GLANCE,
+        values: false,
+        child_windows: 0,
+    };
 
-/// How long one window may be read for, whatever the element budget allows.
-///
-/// The collector thread pumps the WinEvent hooks, so time spent inside a cross-process
-/// automation call is time the next window change waits. Eighty elements is a small
-/// number until one of them belongs to a Chromium tree that answers slowly; the clock
-/// is what makes the cost predictable rather than merely bounded.
-const READ_BUDGET: Duration = Duration::from_millis(120);
+    /// What the applications named in `recording.deepReadApps` get.
+    ///
+    /// Reaching a chat message in an Electron window means descending six named levels
+    /// past a sidebar several hundred elements wide, so both budgets are large. The
+    /// clock is the one that actually binds, and half a second is the most a foreground
+    /// change may cost.
+    pub const STUDY: ReadBudget = ReadBudget {
+        depth: 8,
+        elements: 900,
+        children: 40,
+        time: Duration::from_millis(500),
+        text: TextBudget::STUDY,
+        values: true,
+        child_windows: 8,
+    };
+}
 
 /// Marks a thread as COM-initialized for as long as it is held.
 pub struct ComApartment {
@@ -100,6 +150,9 @@ pub struct WindowReading {
     pub document: Option<(Option<String>, Option<String>)>,
     /// Redacted lines of the text the window is displaying.
     pub lines: Vec<String>,
+    /// How many elements the walk looked at. Only the probe reads this; it is the
+    /// difference between "the budget ran out" and "the window had nothing more".
+    pub visited: usize,
 }
 
 /// Handle to the UIAutomation service.
@@ -176,7 +229,20 @@ impl Automation {
     /// Password fields and offscreen elements are never read — the first because it is a
     /// credential, the second because a hidden menu is not something the user was
     /// looking at.
-    pub fn read_window(&self, hwnd: HWND, want_document: bool, want_text: bool) -> WindowReading {
+    ///
+    /// Each line is labelled with whether it came from content or from the frame around
+    /// it, because the budget is contended and losing that contention to a row of window
+    /// controls is what made the read useless. The label comes from the control type and
+    /// from whether the element sits inside a toolbar or a menu; nothing below a button
+    /// is walked into, since a button holds a label and not a document.
+    pub fn read_window(
+        &self,
+        hwnd: HWND,
+        want_document: bool,
+        want_text: bool,
+        budget: ReadBudget,
+        window_title: Option<&str>,
+    ) -> WindowReading {
         let mut reading = WindowReading::default();
         if !want_document && !want_text {
             return reading;
@@ -189,31 +255,101 @@ impl Automation {
             return reading;
         };
 
-        let deadline = Instant::now() + READ_BUDGET;
-        let mut raw: Vec<String> = Vec::new();
-        let mut queue: VecDeque<(IUIAutomationElement, u32)> = VecDeque::from([(root, 0u32)]);
+        let deadline = Instant::now() + budget.time;
+        let mut raw: Vec<(Surface, String)> = Vec::new();
+        let mut writing = 0usize;
+        let mut queue: VecDeque<(IUIAutomationElement, u32, Surface)> =
+            VecDeque::from([(root, 0u32, Surface::Content)]);
         let mut visited = 0usize;
+        // The window's own child windows are walked only once its own tree is
+        // exhausted. Seeding them at the start cost an Electron window its whole clock
+        // on trees it had already published through the top-level element.
+        let mut asked_child_windows = false;
 
-        while let Some((element, depth)) = queue.pop_front() {
-            let text_done = !want_text || raw.len() >= text::MAX_LINES * 4;
+        loop {
+            self.walk(
+                &mut queue,
+                &condition,
+                &budget,
+                deadline,
+                (want_document, want_text),
+                (&mut reading, &mut raw, &mut writing, &mut visited),
+            );
+
+            let exhausted = visited >= budget.elements || Instant::now() >= deadline;
+            if asked_child_windows || exhausted || budget.child_windows == 0 {
+                break;
+            }
+            asked_child_windows = true;
+            for child in crate::win::child_windows(hwnd, budget.child_windows) {
+                if let Ok(element) = unsafe { self.inner.ElementFromHandle(child) } {
+                    queue.push_back((element, 0u32, Surface::Content));
+                }
+            }
+        }
+
+        reading.visited = visited;
+        reading.lines = text::redact_lines(raw, budget.text, window_title);
+        reading
+    }
+
+    /// Drain a queue of elements into the reading, within the budget.
+    ///
+    /// Split out only so the walk can be run twice over different starting points; the
+    /// budgets are shared across both runs, which is what keeps the second one from
+    /// doubling the cost of the first.
+    #[allow(clippy::too_many_arguments)]
+    fn walk(
+        &self,
+        queue: &mut VecDeque<(IUIAutomationElement, u32, Surface)>,
+        condition: &windows::Win32::UI::Accessibility::IUIAutomationCondition,
+        budget: &ReadBudget,
+        deadline: Instant,
+        (want_document, want_text): (bool, bool),
+        (reading, raw, writing, visited): (
+            &mut WindowReading,
+            &mut Vec<(Surface, String)>,
+            &mut usize,
+            &mut usize,
+        ),
+    ) {
+        while let Some((element, depth, inherited)) = queue.pop_front() {
+            // Enough prose to fill the budget is enough to stop looking. Counting any
+            // named element instead stopped the walk on a sidebar of past
+            // conversations, several hundred entries wide, and never reached the one
+            // that was open.
+            let text_done = !want_text || *writing >= budget.text.lines;
             let document_done = !want_document || reading.document.is_some();
-            if (text_done && document_done) || visited >= MAX_TEXT_ELEMENTS {
+            if (text_done && document_done) || *visited >= budget.elements {
                 break;
             }
             if Instant::now() >= deadline {
                 break;
             }
-            visited += 1;
+            *visited += 1;
 
             if element_is_password(&element) || element_is_offscreen(&element) {
                 continue;
             }
 
+            let kind = unsafe { element.CurrentControlType() }.ok();
             let name = unsafe { element.CurrentName() }
                 .ok()
                 .map(|name| name.to_string());
 
-            if !document_done && element_is_document(&element) {
+            // Furniture is inherited from a toolbar or a menu, and only from those.
+            // Everything else is judged on its own control type, so that a pane counts
+            // as scaffolding without disqualifying the document inside it.
+            let below_furniture = inherited == Surface::Furniture
+                || kind.is_some_and(|kind| FURNITURE_SUBTREES.contains(&kind));
+            let surface = match kind {
+                _ if below_furniture => Surface::Furniture,
+                Some(kind) if FURNITURE_CONTROLS.contains(&kind) => Surface::Furniture,
+                Some(kind) if WRITING_CONTROLS.contains(&kind) => Surface::Writing,
+                _ => Surface::Content,
+            };
+
+            if !document_done && kind == Some(UIA_DocumentControlTypeId) {
                 let title = name.as_deref().and_then(text::redact_line);
                 // The value of a document element is where it came from. It is only
                 // worth recording when it names a location rather than repeating the
@@ -237,28 +373,48 @@ impl Automation {
                 && let Some(name) = name
                 && !name.trim().is_empty()
             {
-                raw.push(name);
+                if surface == Surface::Writing {
+                    *writing += 1;
+                }
+                raw.push((surface, name));
             }
 
-            if depth >= MAX_TEXT_DEPTH {
+            // Counted per element rather than per line: one document answers with a
+            // page of them, and stopping the walk on that is stopping it on whichever
+            // element happened to be reached first.
+            if want_text
+                && budget.values
+                && surface == Surface::Writing
+                && kind.is_some_and(|kind| WRITING_VALUE_CONTROLS.contains(&kind))
+            {
+                let lines = element_writing(&element, budget.text.lines);
+                if !lines.is_empty() {
+                    *writing += 1;
+                }
+                raw.extend(lines.into_iter().map(|line| (Surface::Writing, line)));
+            }
+
+            if depth >= budget.depth || kind.is_some_and(|kind| LEAF_CONTROLS.contains(&kind)) {
                 continue;
             }
             let child_depth = if named { depth + 1 } else { depth };
-            let Ok(children) = (unsafe { element.FindAll(TreeScope_Children, &condition) }) else {
+            let Ok(children) = (unsafe { element.FindAll(TreeScope_Children, condition) }) else {
                 continue;
             };
             let count = unsafe { children.Length() }
                 .unwrap_or(0)
-                .min(MAX_TEXT_CHILDREN);
+                .min(budget.children);
+            let child_surface = if below_furniture {
+                Surface::Furniture
+            } else {
+                Surface::Content
+            };
             for i in 0..count {
                 if let Ok(child) = unsafe { children.GetElement(i) } {
-                    queue.push_back((child, child_depth));
+                    queue.push_back((child, child_depth, child_surface));
                 }
             }
         }
-
-        reading.lines = text::redact_lines(raw);
-        reading
     }
 
     /// True when keyboard focus is inside a password field anywhere on the desktop.
@@ -316,8 +472,134 @@ impl Automation {
     }
 }
 
-fn element_is_document(element: &IUIAutomationElement) -> bool {
-    unsafe { element.CurrentControlType() }.is_ok_and(|kind| kind == UIA_DocumentControlTypeId)
+/// Controls that make everything below them furniture as well.
+///
+/// A ribbon publishes several hundred controls, all of them named after what they do
+/// and none of them after anything that was read or written. Naming the container is
+/// what lets one test disqualify the lot.
+///
+/// Deliberately short. `Pane` was on this list for one round and disqualified almost
+/// everything: Word hangs its document under a pane, and so does Chromium.
+const FURNITURE_SUBTREES: &[UIA_CONTROLTYPE_ID] = &[
+    UIA_ToolBarControlTypeId,
+    UIA_MenuBarControlTypeId,
+    UIA_MenuControlTypeId,
+    UIA_TitleBarControlTypeId,
+    UIA_StatusBarControlTypeId,
+];
+
+/// Controls whose own name describes the frame rather than what is in it.
+///
+/// Their children are judged on their own account: a pane is scaffolding, but what it
+/// holds may be the whole of the window's content.
+const FURNITURE_CONTROLS: &[UIA_CONTROLTYPE_ID] = &[
+    UIA_ButtonControlTypeId,
+    UIA_SplitButtonControlTypeId,
+    UIA_MenuItemControlTypeId,
+    UIA_CheckBoxControlTypeId,
+    UIA_RadioButtonControlTypeId,
+    UIA_ComboBoxControlTypeId,
+    UIA_ScrollBarControlTypeId,
+    UIA_SliderControlTypeId,
+    UIA_SpinnerControlTypeId,
+    UIA_ThumbControlTypeId,
+    UIA_ProgressBarControlTypeId,
+    UIA_ToolTipControlTypeId,
+    UIA_SeparatorControlTypeId,
+    UIA_HeaderControlTypeId,
+    UIA_HeaderItemControlTypeId,
+    UIA_ImageControlTypeId,
+    UIA_WindowControlTypeId,
+    UIA_PaneControlTypeId,
+];
+
+/// Controls with nothing below them worth the cross-process calls to reach.
+///
+/// A button holds a label. Walking into one on a sidebar of several hundred of them is
+/// how the element budget was spent before the read ever reached the conversation.
+const LEAF_CONTROLS: &[UIA_CONTROLTYPE_ID] = &[
+    UIA_ButtonControlTypeId,
+    UIA_SplitButtonControlTypeId,
+    UIA_MenuItemControlTypeId,
+    UIA_CheckBoxControlTypeId,
+    UIA_RadioButtonControlTypeId,
+    UIA_ComboBoxControlTypeId,
+    UIA_ScrollBarControlTypeId,
+    UIA_SliderControlTypeId,
+    UIA_SpinnerControlTypeId,
+    UIA_ThumbControlTypeId,
+    UIA_ProgressBarControlTypeId,
+    UIA_ToolTipControlTypeId,
+    UIA_SeparatorControlTypeId,
+    UIA_ImageControlTypeId,
+];
+
+/// Controls that carry prose rather than a label for something.
+///
+/// These win the budget outright. A conversation's messages and a manuscript's
+/// paragraphs are `Text` and `Document` elements; the sidebar of past conversations
+/// standing in front of them is not, and that is the whole of the difference between
+/// reading the chat and reading the list of chats.
+const WRITING_CONTROLS: &[UIA_CONTROLTYPE_ID] = &[
+    UIA_TextControlTypeId,
+    UIA_DocumentControlTypeId,
+    UIA_EditControlTypeId,
+];
+
+/// Controls worth asking for their contents as well as their name.
+///
+/// A `Text` element's name already is its text, and asking one for a text range is not
+/// free: Chromium answers with a pattern covering the whole document, once per element,
+/// which spent a Claude window's entire read on a hundred copies of the same page.
+const WRITING_VALUE_CONTROLS: &[UIA_CONTROLTYPE_ID] =
+    &[UIA_DocumentControlTypeId, UIA_EditControlTypeId];
+
+/// The writing inside an editing surface, as lines.
+///
+/// Word names its editing surface "Page 1 content", which says a document was open and
+/// nothing about what was in it. The writing itself comes through one of two patterns:
+/// a plain text box publishes it as a `Value`, and a word processor publishes it as a
+/// `Text` range. Both are tried, and both are cut before they are split, because a
+/// range can be a whole page and the work of splitting one is not worth doing on the
+/// thread that pumps the hooks.
+///
+/// An element whose value is a location is a page rather than a document, and is
+/// refused outright. A Chromium document publishes its address as its value and its
+/// whole window as its text range, in document order — which is the navigation, then
+/// the sidebar, then eventually the conversation. Taking the first lines of that is
+/// taking the furniture again, by a longer road.
+fn element_writing(element: &IUIAutomationElement, max_lines: usize) -> Vec<String> {
+    let writing = match element_value(element) {
+        Some(value) if document_path(&value).is_some() => return Vec::new(),
+        Some(value) => Some(value),
+        None => element_range_text(element),
+    };
+    let Some(writing) = writing else {
+        return Vec::new();
+    };
+
+    writing
+        .chars()
+        .take(MAX_VALUE_CHARS)
+        .collect::<String>()
+        // Word ends a paragraph with a carriage return and no line feed, so splitting
+        // on line feeds alone returns the document as a single line.
+        .split(['\n', '\r'])
+        .filter(|line| !line.trim().is_empty())
+        .take(max_lines)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The text of an element that publishes a range rather than a value.
+fn element_range_text(element: &IUIAutomationElement) -> Option<String> {
+    let pattern = unsafe { element.GetCurrentPattern(UIA_TextPatternId) }.ok()?;
+    let text: IUIAutomationTextPattern = pattern.cast().ok()?;
+    let range = unsafe { text.DocumentRange() }.ok()?;
+    let found = unsafe { range.GetText(MAX_VALUE_CHARS as i32) }
+        .ok()?
+        .to_string();
+    (!found.trim().is_empty()).then_some(found)
 }
 
 fn element_is_password(element: &IUIAutomationElement) -> bool {

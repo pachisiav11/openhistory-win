@@ -102,6 +102,7 @@ export function config(overrides: Partial<Config> = {}): Config {
       captureUrls: true,
       captureDocuments: true,
       captureVisibleText: true,
+      deepReadApps: ["claude", "markdown renderer", "winword"],
     },
     inference: {
       provider: "disabled",
