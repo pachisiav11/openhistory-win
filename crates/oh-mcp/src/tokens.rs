@@ -123,20 +123,12 @@ impl TokenStore {
     }
 
     fn save(&self) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            paths::ensure_dir(parent)?;
-        }
         let text = serde_json::to_string_pretty(&TokenFile {
             tokens: self.tokens.clone(),
         })
         .context("could not serialize the token file")?;
 
-        let temporary = self.path.with_extension("json.writing");
-        std::fs::write(&temporary, text)
-            .with_context(|| format!("could not write {}", temporary.display()))?;
-        std::fs::rename(&temporary, &self.path)
-            .with_context(|| format!("could not replace {}", self.path.display()))?;
-        Ok(())
+        paths::write_atomically(&self.path, text)
     }
 }
 

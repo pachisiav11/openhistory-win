@@ -231,12 +231,7 @@ impl Processor {
         let path = self.report_path(date);
 
         let text = serde_json::to_string(report).context("could not serialize a day report")?;
-        let temporary = path.with_extension("json.writing");
-        std::fs::write(&temporary, text)
-            .with_context(|| format!("could not write {}", temporary.display()))?;
-        std::fs::rename(&temporary, &path)
-            .with_context(|| format!("could not replace {}", path.display()))?;
-        Ok(())
+        oh_core::paths::write_atomically(&path, text)
     }
 }
 

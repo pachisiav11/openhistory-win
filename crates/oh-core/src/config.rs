@@ -424,17 +424,8 @@ impl Config {
     /// Writes a sibling temporary file and renames it over the target, so a crash
     /// mid-write leaves the previous settings intact rather than a half-written file.
     pub fn save_to(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            paths::ensure_dir(parent)?;
-        }
-
         let text = serde_json::to_string_pretty(self).context("could not serialize settings")?;
-        let temporary: PathBuf = path.with_extension("json.writing");
-        std::fs::write(&temporary, text)
-            .with_context(|| format!("could not write {}", temporary.display()))?;
-        std::fs::rename(&temporary, path)
-            .with_context(|| format!("could not replace {}", path.display()))?;
-        Ok(())
+        paths::write_atomically(path, text)
     }
 }
 

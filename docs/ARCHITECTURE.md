@@ -1068,3 +1068,37 @@ through unaltered, and blank lines are how Markdown has always separated paragra
 Summaries written before this are stored flat and stay flat — the structure was
 lost at generation time, not at display time, so they have to be written again to gain
 it.
+
+## AD-35: One copy of the application, and one temporary per process
+
+**Decision.** `tauri-plugin-single-instance` is the first plugin registered: a second
+launch focuses the window that already exists and exits. Every atomic write goes
+through `paths::write_atomically`, whose temporary file is named for the process that
+wrote it.
+
+**Why.** Saving reported `could not replace
+%APPDATA%\openhistory-win\index\search-index.json`. Nothing was wrong with the index.
+Two copies of the application were running, and six places in the tree wrote a
+temporary at a fixed `<name>.writing` beside the destination. Both wrote the same
+temporary; the first rename moved it onto the destination; the second found its own
+source gone and failed. The message named the destination, which was intact, and said
+nothing about the other process, which was the whole story.
+
+The two halves of the fix answer different questions. The guard answers whether a
+second copy should exist at all: it should not. An event log, a search index and a
+settings file with two writers is not a window-management problem, it is corruption
+waiting for the right interleaving — and the collector had no interlock either, so
+both copies were recording the same desktop into the same day.
+
+The per-process temporary answers what should happen anyway. A guard covers copies
+this build starts; it does not cover an older build still running, a copy started
+before the guard existed, or a second process a future feature introduces. With a
+name per process the writes no longer collide and the later one wins, which is what
+an atomic write was always supposed to mean. A rename that fails now deletes its own
+temporary, because a per-process name would otherwise be left behind for good.
+
+**Consequence.** Six copies of the same five lines became one function in `oh-core`,
+which is where the failure can be described once. The plugin has no commands, so
+there is no capability to grant. Launching from the tray, a shortcut or the installer
+now raises the running window instead of starting a rival, which is also what somebody
+double-clicking the icon expected in the first place.

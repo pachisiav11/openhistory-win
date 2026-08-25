@@ -329,6 +329,18 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        // First, and before anything reads or writes the data folder. A second copy
+        // of the application is not a second window, it is a second writer over the
+        // same event log, search index and settings file. Two of them running at once
+        // is how a save came back as "could not replace" over a file nothing had
+        // damaged (AD-35).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

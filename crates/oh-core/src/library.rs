@@ -71,11 +71,7 @@ impl LibraryStore {
         );
 
         let path = self.path(&id)?;
-        let temporary = path.with_extension("md.writing");
-        std::fs::write(&temporary, &document)
-            .with_context(|| format!("could not write {}", temporary.display()))?;
-        std::fs::rename(&temporary, &path)
-            .with_context(|| format!("could not replace {}", path.display()))?;
+        crate::paths::write_atomically(&path, &document)?;
 
         Ok(LibraryEntry {
             id,

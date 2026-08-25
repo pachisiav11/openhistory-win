@@ -130,12 +130,7 @@ impl SummaryStore {
 
         let text =
             serde_json::to_string_pretty(summary).context("could not serialize a summary")?;
-        let temporary = path.with_extension("json.writing");
-        std::fs::write(&temporary, text)
-            .with_context(|| format!("could not write {}", temporary.display()))?;
-        std::fs::rename(&temporary, &path)
-            .with_context(|| format!("could not replace {}", path.display()))?;
-        Ok(())
+        crate::paths::write_atomically(&path, text)
     }
 
     /// Delete the summary for one day. Used when a day is reprocessed from scratch.
