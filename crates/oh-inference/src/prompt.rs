@@ -34,7 +34,13 @@ held under a minute is a window that was touched rather than work that was done:
 it out, and never give it a duration it did not have. Call the work what the files and \
 pages call it, not what you suppose it was for: reasoning about how the time was spent \
 is wanted, but a purpose, a mood or an urgency the log does not evidence — \"homework\", \
-\"urgent\", \"exploratory\" — is invention like any other.";
+\"urgent\", \"exploratory\" — is invention like any other. Where an entry reports what \
+was on screen, that is evidence like any other and you should use it: say what a \
+document, page or conversation was about from the words it was showing, rather than \
+only repeating what it was named. A file whose name is an abbreviation and whose text \
+is an essay about one subject is an essay about that subject, and saying so is reading \
+the log rather than guessing at it — but the subject must come from the words \
+recorded, never from what a name like that usually means.";
 
 /// The most episodes to put in one hourly prompt. An hour with more than this was
 /// spent switching windows, and the tail of the list adds noise rather than meaning.
@@ -121,7 +127,9 @@ pub fn hour_prompt(date: NaiveDate, hour: &HourlyRollup, episodes: &[&Episode]) 
     user.push_str(
         "\nThe entries above are this hour's activity, including any that began before \
 it or ran past it. Write two or three sentences describing what was being worked on in \
-this hour.",
+this hour. Where an entry says what was on screen, use it to say what the document, page \
+or conversation was actually about — the day summary is written from these sentences and \
+cannot see the screen text itself, so a name left unexplained here stays unexplained.",
     );
 
     Some(Prompt {
@@ -174,21 +182,35 @@ pub fn day_prompt(date: NaiveDate, rollup: &DailyRollup, hours: &[HourSummary]) 
     }
 
     user.push_str(
-        "\nWrite exactly three paragraphs, separated by blank lines, about 300 words in \
+        "\nWrite exactly three paragraphs, separated by blank lines, about 500 words in \
 total.\n\n\
 Paragraph one, about 50 words: what was worked on, naming the files, documents, pages \
 and topics themselves.\n\n\
-Paragraph two, about 200 words and the longest of the three: analysis, not narration. Do \
-not re-list what paragraph one already said. Say what the shape of the day means — where \
-attention held and where it broke up, which pieces of work were competing for the same \
-stretch of time, what the order they came in suggests was urgent as against merely open, \
-and what was started and then abandoned. Take each of those in turn rather than naming \
-them in a single sentence: give the long stretches their own treatment, then the \
-fragmented ones, then the threads that ran across several hours and what their returning \
-suggests, then the ones that appear once and never again. Say which hours carried the \
-day's weight and which were interruption or upkeep, and how the two were interleaved. \
+Paragraph two, about 400 words and by far the longest of the three: analysis, not \
+narration. Do not re-list what paragraph one already said. Work through the following in \
+turn, giving each its own sentences rather than gathering them into one:\n\
+- What the day's named things actually were. Where the hours say what a document, page \
+or conversation was showing, use it: give the subject, not only the file name. A name \
+nobody explained stays a name, and you should say so rather than supply a meaning for it.\n\
+- Where attention held. Which stretches ran long and unbroken, and on what.\n\
+- Where it broke up, and what it broke up into. If one piece of work was the day's \
+nominal business and something else kept taking the foreground away from it, say so \
+plainly: name both, say how often the switching happened and across which hours, and say \
+whether the returns were long enough to be work in their own right or short enough to be \
+interruption.\n\
+- Whether what pulled attention away was serving the main work or displacing it. A \
+reference consulted about the thing being written is not the same as a second task, and \
+the log's timing and subjects are what tell the two apart. Say which reading the evidence \
+favours and why.\n\
+- Which pieces of work were competing for the same stretch of time, and what the order \
+they came in suggests was urgent as against merely open.\n\
+- What ran across several hours and what its returning suggests; what appears once and \
+never again; what was started and then abandoned.\n\
+- Which hours carried the day's weight and which were interruption or upkeep, and how the \
+two were interleaved.\n\
 Where two readings of a stretch are both open, give both and say which the evidence \
-favours and why. Draw conclusions the log supports but does not state outright.\n\n\
+favours. Draw conclusions the log supports but does not state outright. Write it as \
+continuous prose: the list above is what to cover, not a shape to reproduce.\n\n\
 Paragraph three, about 50 words: begin with \"In conclusion\" and say what the day \
 amounted to.",
     );
@@ -196,7 +218,7 @@ amounted to.",
     Some(Prompt {
         system: SYSTEM.to_owned(),
         user,
-        max_tokens: 700,
+        max_tokens: 1_200,
     })
 }
 
@@ -531,5 +553,55 @@ mod tests {
     #[test]
     fn a_day_with_no_hours_written_gets_no_prompt() {
         assert!(day_prompt(date(), &rollup(), &[]).is_none());
+    }
+
+    #[test]
+    fn the_analysis_paragraph_is_the_bulk_of_the_day_summary() {
+        let prompt = day_prompt(date(), &rollup(), &[written(9, "Worked.")]).unwrap();
+
+        assert!(prompt.user.contains("about 500 words in total"));
+        assert!(
+            prompt
+                .user
+                .contains("about 400 words and by far the longest"),
+            "{}",
+            prompt.user
+        );
+        // Four hundred words of prose will not fit in the budget an earlier, shorter
+        // paragraph was given, and a summary cut off mid-sentence is worse than a
+        // short one.
+        assert!(prompt.max_tokens >= 1_200);
+    }
+
+    /// The day summary is written from the hourly text alone, so a document whose name
+    /// says nothing stays unexplained unless both prompts ask for its subject.
+    #[test]
+    fn both_prompts_ask_what_the_named_things_were_actually_about() {
+        let one = episode("Microsoft Word", Some("final crit"), 900_000);
+        let hourly = hour_prompt(date(), &hour(900_000, &[&one.id]), &[&one]).unwrap();
+        assert!(hourly.user.contains("actually about"), "{}", hourly.user);
+
+        let daily = day_prompt(date(), &rollup(), &[written(9, "Worked.")]).unwrap();
+        assert!(
+            daily
+                .user
+                .contains("give the subject, not only the file name")
+        );
+        assert!(SYSTEM.contains("from the words it was showing"));
+    }
+
+    /// What the user asked the analysis to notice: a day spent nominally on one thing
+    /// and repeatedly interrupted by another.
+    #[test]
+    fn the_analysis_is_asked_about_attention_divided_between_two_things() {
+        let prompt = day_prompt(date(), &rollup(), &[written(9, "Worked.")]).unwrap();
+
+        assert!(prompt.user.contains("nominal business"), "{}", prompt.user);
+        assert!(prompt.user.contains("how often the switching happened"));
+        assert!(
+            prompt
+                .user
+                .contains("serving the main work or displacing it")
+        );
     }
 }
