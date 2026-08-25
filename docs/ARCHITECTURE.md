@@ -976,3 +976,33 @@ whatever is nearest.
 The day prompt's target is a word count (about 300) rather than only a sentence range,
 because a range of sentences bounds structure and not length; the first version of AD-30
 produced ~600 words that restated the same file and figure across several sentences.
+
+## AD-32: A failing subprocess is quoted, not guessed at
+
+**Decision.** `llama-server` is spawned with `stderr` piped and drained into a
+twenty-line ring buffer, and a server that exits during startup is reported with the
+line it actually wrote. No CORS flag is passed at all.
+
+**Why.** Both halves of this were one failure. The spawn passed `--cors-allow-origin *`,
+which llama.cpp has since renamed to `--cors-origins`; build b10612 rejects the old
+spelling and exits immediately with `error: invalid argument: --cors-allow-origin`. That
+message went to a `Stdio::null()`, so all the application could offer was a fixed
+sentence: "llama-server exited while loading the model. The file may not be a valid GGUF,
+or the machine may not have enough memory for it." Both guesses were wrong, and the
+first sends somebody to re-download three gigabytes that were never at fault — the model
+loads in under nine seconds once the argument is gone.
+
+The flag should not have been there in any case. The comment beside it said the
+renderer's fetch would be refused without it, but every request to this server is made
+from the Rust side; the browser's origin rules were never in play. The current default
+is `*` regardless, so dropping it changes nothing but the failure.
+
+**Consequence.** A piped stderr must be drained or the child blocks once the pipe fills,
+so the reader task is not optional bookkeeping — it is what keeps the server running. The
+buffer keeps the tail rather than the head because llama.cpp writes a screen of banners
+before it says anything useful, and `explain_exit` prefers the last line mentioning
+"error" over the last line outright for the same reason.
+
+This is the third instance of one pattern in this codebase, after `is_transient` and
+`auto_summarize`: something that knows the answer, and nothing that asks it. Here the
+subprocess knew exactly why it had died and was being told to be quiet.

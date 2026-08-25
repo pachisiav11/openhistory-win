@@ -120,8 +120,18 @@ struct Running {
     /// `None` when the process was already there and was adopted; killing something
     /// this application did not start would be rude and possibly destructive.
     child: Option<Child>,
+    /// The tail of what the server wrote to stderr, kept so a failure can be reported
+    /// in the server's own words rather than guessed at. Empty for an adopted process.
+    said: Arc<Mutex<Vec<String>>>,
     last_used: Instant,
 }
+
+/// How many lines of the server's output to keep for a failure report.
+///
+/// llama.cpp writes its whole startup log to stderr, so the interesting line — the one
+/// naming the argument it would not take or the tensor it could not read — is at the
+/// end, after a screen of banners.
+const KEPT_LINES: usize = 20;
 
 /// A `llama-server` process and the client that talks to it.
 pub struct LlamaServer {
@@ -186,7 +196,14 @@ impl LlamaServer {
             && self.is_healthy(port).await
         {
             tracing::info!(port, "adopting a llama-server that was already listening");
-            self.adopt(port, options.model_name(), None);
+            // Nothing to collect: this process is somebody else's, and its output went
+            // wherever they sent it.
+            self.adopt(
+                port,
+                options.model_name(),
+                None,
+                Arc::new(Mutex::new(Vec::new())),
+            );
             self.start_watchdog(options.idle_unload);
             return Ok(port);
         }
@@ -212,13 +229,18 @@ impl LlamaServer {
             .arg(port.to_string())
             .arg("--ctx-size")
             .arg(options.context_size.to_string())
-            // Without this the renderer's fetch is refused even on localhost.
-            .arg("--cors-allow-origin")
-            .arg("*")
+            // No CORS flag is passed. It used to send `--cors-allow-origin *`, which
+            // llama.cpp renamed to `--cors-origins`: build b10612 refuses the old
+            // spelling outright, and since every request to this server is made from
+            // the Rust side rather than from the window, the browser's origin rules
+            // were never in play to begin with. The current default is `*` regardless.
             .args(&options.extra_args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            // Kept rather than discarded so that a server which dies during startup can
+            // be reported in its own words. This has to be drained, or a server that
+            // logs more than the pipe holds would block forever on a full buffer.
+            .stderr(Stdio::piped())
             // A release build has no console, so the server's own window would flash
             // up behind the application otherwise.
             .kill_on_drop(true);
@@ -229,7 +251,7 @@ impl LlamaServer {
             command.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let child = command.spawn().map_err(|error| {
+        let mut child = command.spawn().map_err(|error| {
             InferenceError::ServerUnavailable(if error.kind() == std::io::ErrorKind::NotFound {
                 format!(
                     "{} was not found. Install llama.cpp and put llama-server on PATH, or set its \
@@ -241,7 +263,23 @@ impl LlamaServer {
             })
         })?;
 
-        self.adopt(port, options.model_name(), Some(child));
+        let said = Arc::new(Mutex::new(Vec::new()));
+        if let Some(stream) = child.stderr.take() {
+            let collected = Arc::clone(&said);
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut lines = BufReader::new(stream).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut held = collected.lock();
+                    if held.len() == KEPT_LINES {
+                        held.remove(0);
+                    }
+                    held.push(line);
+                }
+            });
+        }
+
+        self.adopt(port, options.model_name(), Some(child), said);
 
         if let Err(error) = self.wait_until_ready(port).await {
             self.stop().await;
@@ -345,13 +383,22 @@ impl LlamaServer {
         }
     }
 
-    fn adopt(&self, port: u16, model: String, child: Option<Child>) {
+    fn adopt(&self, port: u16, model: String, child: Option<Child>, said: Arc<Mutex<Vec<String>>>) {
         *self.running.lock() = Some(Running {
             port,
             model,
             child,
+            said,
             last_used: Instant::now(),
         });
+    }
+
+    /// The tail of what the server wrote before it stopped.
+    fn what_it_said(&self) -> Vec<String> {
+        match self.running.lock().as_ref() {
+            Some(running) => running.said.lock().clone(),
+            None => Vec::new(),
+        }
     }
 
     async fn is_healthy(&self, port: u16) -> bool {
@@ -382,11 +429,9 @@ impl LlamaServer {
             // A server that has exited will never become healthy, however long the
             // deadline is. Notice it immediately rather than waiting three minutes.
             if self.has_exited() {
-                return Err(InferenceError::ServerUnavailable(
-                    "llama-server exited while loading the model. The file may not be a valid \
-                     GGUF, or the machine may not have enough memory for it."
-                        .to_owned(),
-                ));
+                return Err(InferenceError::ServerUnavailable(explain_exit(
+                    &self.what_it_said(),
+                )));
             }
 
             match self.health(port).await {
@@ -470,6 +515,31 @@ enum Health {
     Unreachable,
 }
 
+/// Why the server stopped, in its own words where it gave any.
+///
+/// This used to be a fixed sentence blaming the GGUF or the machine's memory. Both were
+/// guesses, and for a real failure both were wrong: the server was rejecting an argument
+/// this application had passed it (`--cors-allow-origin`, which llama.cpp had renamed),
+/// and it said so plainly on a stderr that was being discarded. Somebody reading
+/// "the file may not be a valid GGUF" re-downloads a three-gigabyte model that was never
+/// the problem.
+fn explain_exit(said: &[String]) -> String {
+    // llama.cpp prefixes a fatal argument or load failure with "error:". That line is
+    // the answer when it exists; the rest of the log is banners.
+    let complaint = said
+        .iter()
+        .rev()
+        .find(|line| line.to_lowercase().contains("error"))
+        .or_else(|| said.last());
+
+    match complaint {
+        Some(line) => format!("llama-server stopped while starting up: {}", line.trim()),
+        None => "llama-server stopped while starting up without saying why. The model file \
+                 may be incomplete, or the machine may not have the memory for it."
+            .to_owned(),
+    }
+}
+
 /// A port nothing is listening on.
 pub fn free_port() -> Result<u16> {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -546,6 +616,26 @@ mod tests {
     use super::*;
     use crate::prompt::Prompt;
     use crate::testing::FakeHttp;
+
+    /// The real failure this replaces: a rejected argument reported as a bad model
+    /// file, sending the user to re-download three gigabytes that were never at fault.
+    #[test]
+    fn a_server_that_refused_an_argument_is_quoted_rather_than_guessed_at() {
+        let said = [
+            "build: 10612 (758443071) with Clang 20.1.8".to_owned(),
+            "error: invalid argument: --cors-allow-origin".to_owned(),
+        ];
+        let explained = explain_exit(&said);
+
+        assert!(explained.contains("--cors-allow-origin"), "{explained}");
+        assert!(!explained.contains("valid GGUF"), "{explained}");
+    }
+
+    #[test]
+    fn a_server_that_said_nothing_admits_that_rather_than_inventing_a_cause() {
+        let explained = explain_exit(&[]);
+        assert!(explained.contains("without saying why"), "{explained}");
+    }
 
     fn request() -> Request {
         Request::local(Prompt {
@@ -722,7 +812,12 @@ mod tests {
         let server = LlamaServer::new();
         // Adoption needs a healthy server, and this one never answers, so drive the
         // completion path directly by adopting it by hand.
-        server.adopt(fake.port(), "test".to_owned(), None);
+        server.adopt(
+            fake.port(),
+            "test".to_owned(),
+            None,
+            Arc::new(Mutex::new(Vec::new())),
+        );
 
         let options = LlamaOptions {
             port: Some(fake.port()),
