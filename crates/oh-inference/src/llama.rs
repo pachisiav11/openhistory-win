@@ -304,6 +304,18 @@ impl LlamaServer {
             "max_tokens": request.prompt.max_tokens,
             "temperature": 0.3,
             "stream": false,
+            // A reasoning model spends its output budget thinking before it writes
+            // anything, and a summary is not a problem that needs working through: the
+            // hourly budget went entirely on a chain of thought that restated the
+            // instructions, leaving `content` empty and the run reported as "local
+            // returned an empty summary". Asked not to think, the same model answers
+            // well inside the same budget.
+            //
+            // Sent in the body rather than as a spawn argument on purpose. A server
+            // that does not know this field ignores it, whereas an argument a build
+            // does not recognise is fatal at startup — which is exactly how
+            // `--cors-allow-origin` broke local inference (AD-32).
+            "chat_template_kwargs": { "enable_thinking": false },
         });
 
         let response = self
@@ -345,13 +357,35 @@ impl LlamaServer {
             InferenceError::Transport(format!("could not read the llama-server response: {error}"))
         })?;
 
-        let cleaned = parsed
-            .choices
-            .first()
+        let choice = parsed.choices.first();
+        let cleaned = choice
             .map(|choice| tidy(&choice.message.content))
             .unwrap_or_default();
 
         if cleaned.is_empty() {
+            // The same shape the OpenAI provider already reports: an answer that never
+            // began because the thinking used the whole budget comes back as a success
+            // with nothing in it, and "the model said nothing" gives no one anything to
+            // act on.
+            let thought_instead = choice.is_some_and(|choice| {
+                choice.finish_reason.as_deref() == Some("length")
+                    || choice
+                        .message
+                        .reasoning_content
+                        .as_deref()
+                        .is_some_and(|thinking| !thinking.trim().is_empty())
+            });
+            if thought_instead {
+                return Err(InferenceError::Rejected {
+                    provider: PROVIDER,
+                    status: status.as_u16(),
+                    message: "the model used its whole output budget thinking and wrote no \
+                              summary. This request asks for thinking to be switched off, so \
+                              this model's template is not honouring that; a different local \
+                              model will do better."
+                        .to_owned(),
+                });
+            }
             return Err(InferenceError::Empty { provider: PROVIDER });
         }
 
@@ -603,12 +637,21 @@ struct ChatResponse {
 #[derive(Deserialize)]
 struct Choice {
     message: ChatMessage,
+    /// `"length"` when the answer stopped on the token ceiling rather than finishing.
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ChatMessage {
     #[serde(default)]
     content: String,
+    /// Where a reasoning model puts its thinking.
+    ///
+    /// Never used as the summary — it is a working note addressed to itself, not an
+    /// answer — but its presence is what explains an empty `content`.
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 #[cfg(test)]
@@ -755,6 +798,38 @@ mod tests {
         assert!(sent.contains("\"stream\":false"), "{sent}");
         assert!(sent.contains("You summarize."), "{sent}");
 
+        server.stop().await;
+    }
+
+    /// The shape a real reasoning model returned: the whole budget spent in
+    /// `reasoning_content`, `content` empty, and the run reported to the user as
+    /// "local returned an empty summary" — true, and no use to anybody.
+    #[tokio::test]
+    async fn a_model_that_only_thought_says_so_rather_than_looking_silent() {
+        let (_temp, model) = model_file();
+        let fake = FakeHttp::scripted(vec![
+            (200, r#"{"status":"ok"}"#),
+            (
+                200,
+                r#"{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"","reasoning_content":"Thinking Process: the user wants a summary..."}}]}"#,
+            ),
+        ])
+        .await;
+
+        let server = LlamaServer::new();
+        let options = LlamaOptions {
+            port: Some(fake.port()),
+            idle_unload: Duration::ZERO,
+            ..LlamaOptions::for_model(model)
+        };
+
+        let error = server.complete(&options, &request()).await.unwrap_err();
+        match error {
+            InferenceError::Rejected { message, .. } => {
+                assert!(message.contains("thinking"), "{message}");
+            }
+            other => panic!("expected the thinking case to be named, got {other:?}"),
+        }
         server.stop().await;
     }
 

@@ -1006,3 +1006,36 @@ before it says anything useful, and `explain_exit` prefers the last line mention
 This is the third instance of one pattern in this codebase, after `is_transient` and
 `auto_summarize`: something that knows the answer, and nothing that asks it. Here the
 subprocess knew exactly why it had died and was being told to be quiet.
+
+## AD-33: A local model is asked not to think
+
+**Decision.** Every request to `llama-server` carries
+`chat_template_kwargs: { enable_thinking: false }`, and an answer that comes back empty
+having spent its budget in `reasoning_content` is reported as that rather than as
+silence.
+
+**Why.** The fetched Gemma model is a reasoning model. Handed an hourly prompt it wrote
+three hundred tokens of chain-of-thought that restated the instructions back to itself
+("Constraint 1: Be concrete... Constraint 3: Reply with prose only"), hit the ceiling
+mid-sentence with `finish_reason: "length"`, and returned `content: ""`. The parser reads
+`content` and nothing else, so the run surfaced as "local returned an empty summary" —
+accurate, and no help at all. Asked not to think, the same model on the same budget
+answers in a third of the tokens.
+
+Summarizing a day is not a problem that rewards deliberation. The material is already
+reduced to a list of what was on screen and for how long; there is nothing to work out,
+only something to say. Thinking here buys nothing and costs the entire output budget on
+a small model, which is exactly the class of model somebody choosing local inference is
+most likely to be running.
+
+**Consequence.** The instruction goes in the request body, never as a spawn argument.
+`--reasoning off` would do the same job for a server this application starts, but an
+argument an older build does not recognise is fatal at startup — which is precisely how
+`--cors-allow-origin` broke local inference in AD-32. An unknown field in the body is
+ignored; an unknown flag on the command line is a dead server. The body also covers an
+adopted process, which was started by somebody else and cannot be given arguments at all.
+
+`reasoning_content` is parsed but never used as the summary. It is a working note
+addressed to itself, not an answer, and printing it as a day's summary would be worse
+than the empty string it replaces. It exists in the struct only so an empty `content` can
+be explained.
