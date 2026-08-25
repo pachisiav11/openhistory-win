@@ -230,11 +230,11 @@ impl Automation {
     /// credential, the second because a hidden menu is not something the user was
     /// looking at.
     ///
-    /// Each line is labelled with whether it came from content or from the frame around
-    /// it, because the budget is contended and losing that contention to a row of window
-    /// controls is what made the read useless. The label comes from the control type and
-    /// from whether the element sits inside a toolbar or a menu; nothing below a button
-    /// is walked into, since a button holds a label and not a document.
+    /// Each line is labelled as writing, content or furniture, because the budget is
+    /// contended and losing that contention to a row of window controls is what made the
+    /// read useless. The label comes from the control type and from whether the element
+    /// sits inside a toolbar or a menu; nothing below a button is walked into, since a
+    /// button holds a label and not a document.
     pub fn read_window(
         &self,
         hwnd: HWND,
@@ -276,8 +276,9 @@ impl Automation {
                 (&mut reading, &mut raw, &mut writing, &mut visited),
             );
 
+            let satisfied = !want_text || writing >= budget.text.lines;
             let exhausted = visited >= budget.elements || Instant::now() >= deadline;
-            if asked_child_windows || exhausted || budget.child_windows == 0 {
+            if asked_child_windows || satisfied || exhausted || budget.child_windows == 0 {
                 break;
             }
             asked_child_windows = true;
