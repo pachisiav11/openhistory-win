@@ -174,16 +174,21 @@ pub fn day_prompt(date: NaiveDate, rollup: &DailyRollup, hours: &[HourSummary]) 
     }
 
     user.push_str(
-        "\nWrite exactly three paragraphs, separated by blank lines, about 200 words in \
+        "\nWrite exactly three paragraphs, separated by blank lines, about 300 words in \
 total.\n\n\
 Paragraph one, about 50 words: what was worked on, naming the files, documents, pages \
 and topics themselves.\n\n\
-Paragraph two, about 100 words: analysis, not narration. Do not re-list what paragraph \
-one already said. Say what the shape of the day means — where attention held and where \
-it broke up, which pieces of work were competing for the same stretch of time, what the \
-order they came in suggests was urgent as against merely open, and what was started and \
-then abandoned. Draw conclusions the log supports but does not state outright, and say \
-which reading the evidence favours where it is ambiguous.\n\n\
+Paragraph two, about 200 words and the longest of the three: analysis, not narration. Do \
+not re-list what paragraph one already said. Say what the shape of the day means — where \
+attention held and where it broke up, which pieces of work were competing for the same \
+stretch of time, what the order they came in suggests was urgent as against merely open, \
+and what was started and then abandoned. Take each of those in turn rather than naming \
+them in a single sentence: give the long stretches their own treatment, then the \
+fragmented ones, then the threads that ran across several hours and what their returning \
+suggests, then the ones that appear once and never again. Say which hours carried the \
+day's weight and which were interruption or upkeep, and how the two were interleaved. \
+Where two readings of a stretch are both open, give both and say which the evidence \
+favours and why. Draw conclusions the log supports but does not state outright.\n\n\
 Paragraph three, about 50 words: begin with \"In conclusion\" and say what the day \
 amounted to.",
     );
@@ -191,7 +196,7 @@ amounted to.",
     Some(Prompt {
         system: SYSTEM.to_owned(),
         user,
-        max_tokens: 500,
+        max_tokens: 700,
     })
 }
 
