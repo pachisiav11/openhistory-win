@@ -29,11 +29,28 @@ session\", no \"a mix of tasks\" — and do not restate totals you were given. W
 controls, menu and toolbar labels, and other interface furniture are not activity: \
 never describe them. Where an entry carries nothing but an application name, say that \
 the application was in use and nothing further — a short summary is the correct answer \
-to a thin hour, and inventing detail to fill one is worse than brevity.";
+to a thin hour, and inventing detail to fill one is worse than brevity. Anything that \
+held under a minute is a window that was touched rather than work that was done: leave \
+it out, and never give it a duration it did not have. Call the work what the files and \
+pages call it, not what you suppose it was for: reasoning about how the time was spent \
+is wanted, but a purpose, a mood or an urgency the log does not evidence — \"homework\", \
+\"urgent\", \"exploratory\" — is invention like any other.";
 
 /// The most episodes to put in one hourly prompt. An hour with more than this was
 /// spent switching windows, and the tail of the list adds noise rather than meaning.
 const MAX_EPISODES_PER_HOUR: usize = 25;
+
+/// The least time an episode must hold to be worth naming.
+///
+/// Below a minute it is a window that was touched, not work that was done. Ten seconds
+/// in Windows Terminal came back as "five minutes of command-line activity" in a real
+/// summary: the entry sat in the list looking like every other entry, so the model gave
+/// it a sentence and a duration to match. Filtering here rather than asking the model to
+/// use its judgement is the difference between a rule and a hope.
+///
+/// The hour's own total is untouched, so the time is still counted — it is only not
+/// given a name of its own.
+const MIN_EPISODE_MS: i64 = 60_000;
 
 /// What was asked of a model, ready to send.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,13 +88,33 @@ pub fn hour_prompt(date: NaiveDate, hour: &HourlyRollup, episodes: &[&Episode]) 
         human_duration(hour.active_ms),
     );
 
-    for episode in episodes.iter().take(MAX_EPISODES_PER_HOUR) {
+    // An hour of nothing but brief switches still has to be describable, so the floor
+    // is dropped rather than leaving the model an empty list to explain.
+    let worth_naming: Vec<&Episode> = episodes
+        .iter()
+        .copied()
+        .filter(|episode| episode.active_ms >= MIN_EPISODE_MS)
+        .collect();
+    let (named, brief) = if worth_naming.is_empty() {
+        (episodes, 0)
+    } else {
+        let brief = episodes.len() - worth_naming.len();
+        (worth_naming.as_slice(), brief)
+    };
+
+    for episode in named.iter().take(MAX_EPISODES_PER_HOUR) {
         user.push_str(&render_episode(&PublicEpisode::from(*episode), hour.hour));
     }
-    if episodes.len() > MAX_EPISODES_PER_HOUR {
+    if named.len() > MAX_EPISODES_PER_HOUR {
         user.push_str(&format!(
             "\n({} further short entries omitted.)\n",
-            episodes.len() - MAX_EPISODES_PER_HOUR
+            named.len() - MAX_EPISODES_PER_HOUR
+        ));
+    }
+    if brief > 0 {
+        user.push_str(&format!(
+            "\n({brief} briefer switches, each under a minute, are counted in the total \
+             above but are not listed: they were not worked in.)\n"
         ));
     }
 
@@ -137,24 +174,24 @@ pub fn day_prompt(date: NaiveDate, rollup: &DailyRollup, hours: &[HourSummary]) 
     }
 
     user.push_str(
-        "\nWrite an account of this day in three paragraphs, then a fourth. Target \
-about 300 words in total — that is a target to stay close to, not a floor to fill. \
-First: the pieces of work themselves, each one named — the files, documents, pages \
-and topics it involved, and roughly how long each took. Second: the order the day \
-ran in and where the work changed direction. Third: what the shape of the time says \
-— the longest unbroken stretch and anything begun and not returned to. Name \
-something concrete from the log in every sentence, but name each file, topic or \
-figure once; do not return to something already covered. Where an hour holds \
-little, write less about it rather than padding it out.\n\n\
-After those three paragraphs, leave a blank line and add a fourth, separate from \
-and outside the detailed account above, within the same 300-word target: two or \
-three sentences that just summarize what was done during the day.",
+        "\nWrite exactly three paragraphs, separated by blank lines, about 200 words in \
+total.\n\n\
+Paragraph one, about 50 words: what was worked on, naming the files, documents, pages \
+and topics themselves.\n\n\
+Paragraph two, about 100 words: analysis, not narration. Do not re-list what paragraph \
+one already said. Say what the shape of the day means — where attention held and where \
+it broke up, which pieces of work were competing for the same stretch of time, what the \
+order they came in suggests was urgent as against merely open, and what was started and \
+then abandoned. Draw conclusions the log supports but does not state outright, and say \
+which reading the evidence favours where it is ambiguous.\n\n\
+Paragraph three, about 50 words: begin with \"In conclusion\" and say what the day \
+amounted to.",
     );
 
     Some(Prompt {
         system: SYSTEM.to_owned(),
         user,
-        max_tokens: 700,
+        max_tokens: 500,
     })
 }
 
@@ -381,6 +418,40 @@ mod tests {
             "{}",
             prompt.user
         );
+    }
+
+    /// Ten seconds in a terminal came back from a real run as "five minutes of
+    /// command-line activity": the entry looked like every other entry, so it got a
+    /// sentence and a duration to match. It is counted in the hour's total and not
+    /// given a name of its own.
+    #[test]
+    fn a_window_touched_for_seconds_is_not_named() {
+        let worked = episode("Microsoft Word", Some("final crit"), 900_000);
+        let touched = episode("Windows Terminal", Some("cmd"), 10_000);
+        let ids = [worked.id.as_str(), touched.id.as_str()];
+        let prompt = hour_prompt(date(), &hour(910_000, &ids), &[&worked, &touched]).unwrap();
+
+        assert!(prompt.user.contains("final crit"), "{}", prompt.user);
+        assert!(!prompt.user.contains("Windows Terminal"), "{}", prompt.user);
+        assert!(
+            prompt.user.contains("1 briefer switches"),
+            "{}",
+            prompt.user
+        );
+    }
+
+    /// An hour that was nothing but brief switches still has to be describable, so the
+    /// floor gives way rather than handing the model an empty list to account for.
+    #[test]
+    fn an_hour_of_nothing_but_brief_switches_still_lists_them() {
+        let one = episode("Google Chrome", Some("a tab"), 20_000);
+        let two = episode("Slack", Some("a channel"), 20_000);
+        let ids = [one.id.as_str(), two.id.as_str()];
+        let prompt = hour_prompt(date(), &hour(120_000, &ids), &[&one, &two]).unwrap();
+
+        assert!(prompt.user.contains("Google Chrome"), "{}", prompt.user);
+        assert!(prompt.user.contains("Slack"), "{}", prompt.user);
+        assert!(!prompt.user.contains("briefer switches"), "{}", prompt.user);
     }
 
     #[test]
