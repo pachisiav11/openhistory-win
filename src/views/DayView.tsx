@@ -19,7 +19,7 @@ import {
   type DaySummary,
   type Readiness,
 } from "../lib/ipc";
-import { duration, shiftDate } from "../lib/format";
+import { duration, paragraphs, shiftDate } from "../lib/format";
 
 interface Props {
   date: string;
@@ -209,7 +209,11 @@ export default function DayView({
         ) : null}
 
         {summary?.daily ? (
-          <p className="summary__text">{summary.daily}</p>
+          <div className="summary__text">
+            {paragraphs(summary.daily).map((para, index) => (
+              <p key={index}>{para}</p>
+            ))}
+          </div>
         ) : (
           <p className="empty">No summary has been written for this day.</p>
         )}

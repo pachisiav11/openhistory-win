@@ -20,7 +20,7 @@ import {
   type DaySummary,
   type LibraryEntry,
 } from "../lib/ipc";
-import { clockTime, fileSize, shiftDate } from "../lib/format";
+import { clockTime, fileSize, paragraphs, shiftDate } from "../lib/format";
 import { parseMarkdown, type Block } from "../lib/markdown";
 
 interface Props {
@@ -184,7 +184,11 @@ export default function Summary({ date, onChangeDate, revision }: Props) {
         </div>
 
         {summary?.daily ? (
-          <p className="summary__text">{summary.daily}</p>
+          <div className="summary__text">
+            {paragraphs(summary.daily).map((para, index) => (
+              <p key={index}>{para}</p>
+            ))}
+          </div>
         ) : (
           <p className="empty">
             No summary has been written for this day. Saving it still keeps the hours and where

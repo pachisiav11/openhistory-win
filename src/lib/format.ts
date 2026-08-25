@@ -45,3 +45,17 @@ export function fileSize(bytes: number): string {
   if (bytes < 1000) return `${Math.max(0, Math.round(bytes))} bytes`;
   return `${(bytes / 1000).toFixed(1)} kB`;
 }
+
+/**
+ * A summary split into the paragraphs it was written in.
+ *
+ * The day summary is asked for in three paragraphs (AD-30) and stored with blank
+ * lines between them. HTML collapses those, so a single element would render the
+ * structure away again after the backend went to the trouble of keeping it.
+ */
+export function paragraphs(text: string): string[] {
+  return text
+    .split(/\n\s*\n/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}

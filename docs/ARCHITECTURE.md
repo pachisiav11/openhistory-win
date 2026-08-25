@@ -1039,3 +1039,32 @@ adopted process, which was started by somebody else and cannot be given argument
 addressed to itself, not an answer, and printing it as a day's summary would be worse
 than the empty string it replaces. It exists in the struct only so an empty `content` can
 be explained.
+
+## AD-34: A paragraph break is part of the answer
+
+**Decision.** `tidy` keeps the blank lines a model puts between paragraphs, joining
+lines only inside one, and the views render one `<p>` per paragraph rather than one
+element for the whole summary.
+
+**Why.** The day prompt asks for three paragraphs — what was done, what it means,
+and a conclusion — because a single block of two hundred words is not read, it is
+skimmed. The models delivered them. `tidy` then joined every line with a space on its
+way to storage, and the interface put whatever survived into one `<p>`, where HTML
+collapses what is left. Two independent layers erased the same structure, so the prompt
+could be rewritten indefinitely without the reader ever seeing the difference.
+
+The flattening was right when it was written. A summary was one paragraph then, and a
+model that produced two had invented a shape nobody asked for. What changed is that
+the shape is now asked for; what did not change is the code that assumed it never
+would be.
+
+**Consequence.** Hard-wrapped output is still unwrapped, because a model that breaks
+its lines at eighty columns is describing its own margin, not the document's. The
+distinction `tidy` now draws is between a blank line, which means a paragraph, and a
+single newline, which means nothing.
+
+Markdown in the library needed no change: `compose` already wrote the summary text
+through unaltered, and blank lines are how Markdown has always separated paragraphs.
+Summaries written before this are stored flat and stay flat — the structure was
+lost at generation time, not at display time, so they have to be written again to gain
+it.

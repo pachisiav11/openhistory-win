@@ -464,9 +464,16 @@ body {
 }
 
 .summary__text {
-  margin: 0;
   font-size: 0.9rem;
   line-height: 1.55;
+}
+
+.summary__text p {
+  margin: 0 0 12px;
+}
+
+.summary__text p:last-child {
+  margin-bottom: 0;
 }
 
 .notice--ok {

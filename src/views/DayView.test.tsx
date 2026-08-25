@@ -49,6 +49,22 @@ describe("Day view", () => {
     expect(await screen.findByText("A morning of Rust and a short read.")).toBeInTheDocument();
   });
 
+  it("keeps the three paragraphs a day summary is written in", async () => {
+    backend();
+    mockCommand("day_summary", () =>
+      summary({
+        date: "2026-08-21",
+        daily: "What was done.\n\nWhat it means.\n\nIn conclusion, a good day.",
+      }),
+    );
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    const first = await screen.findByText("What was done.");
+    expect(first.tagName).toBe("P");
+    expect(screen.getByText("What it means.")).toBeInTheDocument();
+    expect(screen.getByText("In conclusion, a good day.")).toBeInTheDocument();
+  });
+
   it("says why it cannot write one, rather than hiding the button", async () => {
     backend({
       readiness: {

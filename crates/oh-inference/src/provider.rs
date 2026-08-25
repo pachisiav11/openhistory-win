@@ -84,7 +84,7 @@ pub struct Completion {
     pub model: String,
 }
 
-/// Tidy a model's answer into the one paragraph that was asked for.
+/// Tidy a model's answer into the shape it was asked for.
 ///
 /// Small local models add a preamble however firmly the system prompt forbids one, and
 /// some wrap the whole answer in quotes. Cleaning that here rather than in each
@@ -116,13 +116,33 @@ pub fn tidy(raw: &str) -> String {
         text = text[1..text.len() - 1].trim();
     }
 
-    // Collapse the blank lines a model uses to separate paragraphs it was not asked
-    // for, so a summary is one block of prose whatever it was given.
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
+    // Paragraph breaks are kept, because the day summary is asked for in three of them
+    // (AD-30). This used to join every line with a space on the reasoning that a
+    // paragraph was something the model had invented — true when a summary was meant to
+    // be one block, and the reason the three-paragraph structure arrived flattened into
+    // one however carefully the prompt asked for it.
+    //
+    // Within a paragraph the lines are still joined, so a model that hard-wraps its
+    // prose does not leave the interface rendering a ragged column.
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(current.join(" "));
+                current.clear();
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current.join(" "));
+    }
+
+    paragraphs.join("\n\n")
 }
 
 fn strip_prefix_ignoring_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
@@ -189,11 +209,20 @@ mod tests {
         );
     }
 
+    /// The day summary is asked for in three paragraphs, so they have to survive being
+    /// tidied. This used to join them into one block, which is why the structure the
+    /// prompt asked for never reached the interface.
     #[test]
-    fn paragraphs_are_joined_into_one_block() {
+    fn paragraphs_are_kept_and_hard_wrapping_is_undone() {
         assert_eq!(
-            tidy("First sentence.\n\n  Second sentence.  \n"),
-            "First sentence. Second sentence."
+            tidy("First para.\n\n  Second para.  \n"),
+            "First para.\n\nSecond para."
+        );
+
+        // A run of blank lines is one break, and lines inside a paragraph are joined.
+        assert_eq!(
+            tidy("A line\nwrapped in two.\n\n\n\nThe next one."),
+            "A line wrapped in two.\n\nThe next one."
         );
     }
 

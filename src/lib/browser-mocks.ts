@@ -631,7 +631,11 @@ export function installBrowserMocks(): void {
     }));
     summaries.set(date, {
       date,
-      daily: "A morning of Rust, a short read of the Win32 documentation, and a private session.",
+      daily:
+        "A morning of Rust, a short read of the Win32 documentation, and a private session." +
+        "\n\nThe morning held together around the collector, and broke up once the Win32 " +
+        "documentation was opened. Nothing that was started was left unfinished." +
+        "\n\nIn conclusion, a short but unbroken morning of work on the collector.",
       dailyGeneratedAt: new Date().toISOString(),
       hours: written,
     });
