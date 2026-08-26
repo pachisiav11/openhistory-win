@@ -182,13 +182,16 @@ pub fn day_prompt(date: NaiveDate, rollup: &DailyRollup, hours: &[HourSummary]) 
     }
 
     user.push_str(
-        "\nWrite exactly three paragraphs, separated by blank lines, about 500 words in \
+        "\nWrite exactly four paragraphs, separated by blank lines, about 500 words in \
 total.\n\n\
 Paragraph one, about 50 words: what was worked on, naming the files, documents, pages \
 and topics themselves.\n\n\
-Paragraph two, about 400 words and by far the longest of the three: analysis, not \
-narration. Do not re-list what paragraph one already said. Work through the following in \
-turn, giving each its own sentences rather than gathering them into one:\n\
+Paragraphs two and three are the analysis, not narration, and together are by far the \
+longest part: about 200 words each, one continuous argument split in two for \
+readability rather than two separate topics. Do not re-list what paragraph one already \
+said, and do not let paragraph three repeat paragraph two.\n\n\
+Paragraph two covers what the day's stretches actually were and how attention moved \
+between them:\n\
 - What the day's named things actually were. Where the hours say what a document, page \
 or conversation was showing, use it: give the subject, not only the file name. A name \
 nobody explained stays a name, and you should say so rather than supply a meaning for it.\n\
@@ -201,17 +204,18 @@ interruption.\n\
 - Whether what pulled attention away was serving the main work or displacing it. A \
 reference consulted about the thing being written is not the same as a second task, and \
 the log's timing and subjects are what tell the two apart. Say which reading the evidence \
-favours and why.\n\
+favours and why.\n\n\
+Paragraph three covers the day's shape across the hours as a whole:\n\
 - Which pieces of work were competing for the same stretch of time, and what the order \
 they came in suggests was urgent as against merely open.\n\
 - What ran across several hours and what its returning suggests; what appears once and \
 never again; what was started and then abandoned.\n\
 - Which hours carried the day's weight and which were interruption or upkeep, and how the \
-two were interleaved.\n\
+two were interleaved.\n\n\
 Where two readings of a stretch are both open, give both and say which the evidence \
-favours. Draw conclusions the log supports but does not state outright. Write it as \
-continuous prose: the list above is what to cover, not a shape to reproduce.\n\n\
-Paragraph three, about 50 words: begin with \"In conclusion\" and say what the day \
+favours. Draw conclusions the log supports but does not state outright. Write each of the \
+two as continuous prose: the lists above are what to cover, not a shape to reproduce.\n\n\
+Paragraph four, about 50 words: begin with \"In conclusion\" and say what the day \
 amounted to.",
     );
 
@@ -556,18 +560,19 @@ mod tests {
     }
 
     #[test]
-    fn the_analysis_paragraph_is_the_bulk_of_the_day_summary() {
+    fn the_analysis_is_the_bulk_of_the_day_summary_split_in_two_for_readability() {
         let prompt = day_prompt(date(), &rollup(), &[written(9, "Worked.")]).unwrap();
 
         assert!(prompt.user.contains("about 500 words in total"));
+        assert!(prompt.user.contains("Write exactly four paragraphs"));
         assert!(
             prompt
                 .user
-                .contains("about 400 words and by far the longest"),
+                .contains("about 200 words each, one continuous argument split in two"),
             "{}",
             prompt.user
         );
-        // Four hundred words of prose will not fit in the budget an earlier, shorter
+        // Four hundred words of analysis will not fit in the budget an earlier, shorter
         // paragraph was given, and a summary cut off mid-sentence is worse than a
         // short one.
         assert!(prompt.max_tokens >= 1_200);
