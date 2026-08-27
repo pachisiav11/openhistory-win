@@ -75,7 +75,8 @@ describe("Day view", () => {
     });
     render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
 
-    expect(await screen.findByText(/need your agreement/)).toBeInTheDocument();
+    // Beside both things it blocks: writing a summary, and asking about the day.
+    expect(await screen.findAllByText(/need your agreement/)).toHaveLength(2);
     expect(screen.getByRole("button", { name: "Write summary" })).toBeDisabled();
   });
 
@@ -284,6 +285,127 @@ describe("Day view", () => {
 
     expect(await screen.findByText(/30m at the machine · 30m of it working/)).toBeInTheDocument();
     expect(screen.queryByText("Idle")).not.toBeInTheDocument();
+  });
+
+  it("leaves an application in front for under a minute out of the list", async () => {
+    backend();
+    mockCommand("day_report", () =>
+      report(
+        [
+          episode({ id: "a", app: "Visual Studio Code", activeMs: 45 * MINUTE }),
+          episode({ id: "b", app: "Calculator", activeMs: 20 * 1000 }),
+        ],
+        hours(),
+      ),
+    );
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    expect(await screen.findByText("Visual Studio Code")).toBeInTheDocument();
+    expect(screen.queryByText("Calculator")).not.toBeInTheDocument();
+    // Hidden, not discarded: the panel says the time is still in the totals.
+    expect(
+      screen.getByText(/1 application in front for under a minute is counted in the totals/),
+    ).toBeInTheDocument();
+  });
+
+  it("says so when nothing was in front for longer than a minute", async () => {
+    backend();
+    mockCommand("day_report", () =>
+      report(
+        [
+          episode({ id: "a", app: "Calculator", durationMs: 20 * 1000, activeMs: 20 * 1000 }),
+        ],
+        hours(),
+      ),
+    );
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    expect(
+      await screen.findByText(/Nothing was in front for longer than a minute/),
+    ).toBeInTheDocument();
+  });
+
+  it("answers a question about the day", async () => {
+    backend({ readiness: READY });
+    mockCommand("chat_about_day", (args) => ({
+      text: `The morning went to ${String(args?.date)}.`,
+      model: "claude-haiku-4-5",
+    }));
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    const box = await screen.findByLabelText("Your question");
+    await userEvent.type(box, "What took the morning?");
+    await userEvent.click(screen.getByRole("button", { name: "Ask" }));
+
+    expect(await screen.findByText("What took the morning?")).toBeInTheDocument();
+    expect(screen.getByText("The morning went to 2026-08-21.")).toBeInTheDocument();
+    // Which model answered, not which one is selected now.
+    expect(screen.getByText("Answered by claude-haiku-4-5.")).toBeInTheDocument();
+    // The box empties, so the next question is not typed onto the end of the last.
+    expect(box).toHaveValue("");
+  });
+
+  /// Nothing about a conversation is stored, so the transcript is the only memory it
+  /// has and it has to travel back with the question.
+  it("carries the conversation so far back with the next question", async () => {
+    const sent: unknown[] = [];
+    backend({ readiness: READY });
+    mockCommand("chat_about_day", (args) => {
+      sent.push(args?.turns);
+      return { text: `Answer ${sent.length}.`, model: "claude-haiku-4-5" };
+    });
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    const box = await screen.findByLabelText("Your question");
+    await userEvent.type(box, "First?");
+    await userEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByText("Answer 1.")).toBeInTheDocument();
+
+    await userEvent.type(box, "Second?");
+    await userEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByText("Answer 2.")).toBeInTheDocument();
+
+    expect(sent[0]).toEqual([]);
+    expect(sent[1]).toEqual([{ asked: "First?", answered: "Answer 1." }]);
+  });
+
+  it("starts a new conversation when the day changes", async () => {
+    backend({ readiness: READY });
+    mockCommand("chat_about_day", () => ({ text: "It went well.", model: "claude-haiku-4-5" }));
+    const { rerender } = render(
+      <DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />,
+    );
+
+    const box = await screen.findByLabelText("Your question");
+    await userEvent.type(box, "What happened?");
+    await userEvent.click(screen.getByRole("button", { name: "Ask" }));
+    expect(await screen.findByText("It went well.")).toBeInTheDocument();
+
+    rerender(<DayView date="2026-08-20" onChangeDate={() => {}} revision={0} />);
+
+    await waitFor(() => expect(screen.queryByText("It went well.")).not.toBeInTheDocument());
+  });
+
+  it("reports a failure to answer instead of showing an empty reply", async () => {
+    backend({ readiness: READY });
+    mockCommand("chat_about_day", () => {
+      throw new Error("google stopped early: it reached its token ceiling");
+    });
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    const box = await screen.findByLabelText("Your question");
+    await userEvent.type(box, "What happened?");
+    await userEvent.click(screen.getByRole("button", { name: "Ask" }));
+
+    expect(await screen.findByText(/reached its token ceiling/)).toBeInTheDocument();
+  });
+
+  it("cannot be asked anything while no model is configured", async () => {
+    backend();
+    render(<DayView date="2026-08-21" onChangeDate={() => {}} revision={0} />);
+
+    expect(await screen.findByLabelText("Your question")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Ask" })).toBeDisabled();
   });
 
   it("explains a day with nothing on it", async () => {

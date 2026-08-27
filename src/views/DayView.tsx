@@ -6,8 +6,9 @@
  * than hidden. A person who has not set up a model should be able to see that the
  * feature exists and what it needs, not wonder where it went.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
+  chatAboutDay,
   dayReport,
   daySummary,
   forgetSummary,
@@ -15,6 +16,7 @@ import {
   localDate,
   summarizeDay,
   summarizeHour,
+  type ChatTurn,
   type DayReport,
   type DaySummary,
   type Readiness,
@@ -31,6 +33,20 @@ interface Props {
   onFocused?: () => void;
   /** Open the Summary view on this day. Absent when there is nowhere to open it. */
   onOpenSummary?: () => void;
+}
+
+/// The least time an application must hold to be worth a row of its own.
+///
+/// Under a minute is a window that was touched, not work that was done, and a row in
+/// this list gives it the same standing as the hours of real work above it. The same
+/// floor is applied to the episodes that go into a prompt, so the list and the written
+/// summary now agree about what counted. The totals in the panel head are untouched:
+/// the time is still counted, it is only not named.
+const MIN_APP_MS = 60_000;
+
+/** One exchange, with the model that answered it. */
+interface Exchange extends ChatTurn {
+  model: string;
 }
 
 function hourLabel(hour: number): string {
@@ -69,6 +85,41 @@ export default function DayView({
   // another day and an hour of it in the same click leaves the hour marked.
   const [marked, setMarked] = useState<number | null>(null);
   useEffect(() => setMarked(null), [date]);
+
+  // The conversation is about this day, so moving to another one starts a new one.
+  // It is held here and nowhere else: the backend stores nothing about a chat, and the
+  // transcript travels back with each question.
+  const [turns, setTurns] = useState<Exchange[]>([]);
+  const [question, setQuestion] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  useEffect(() => {
+    setTurns([]);
+    setQuestion("");
+    setAskError(null);
+  }, [date]);
+
+  const ask = async (event: FormEvent) => {
+    event.preventDefault();
+    const asked = question.trim();
+    if (asked === "" || asking) return;
+
+    setAsking(true);
+    setAskError(null);
+    try {
+      const reply = await chatAboutDay(
+        date,
+        asked,
+        turns.map((turn) => ({ asked: turn.asked, answered: turn.answered })),
+      );
+      setTurns((before) => [...before, { asked, answered: reply.text, model: reply.model }]);
+      setQuestion("");
+    } catch (cause) {
+      setAskError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setAsking(false);
+    }
+  };
 
   const hourNodes = useRef(new Map<number, HTMLLIElement>());
   useEffect(() => {
@@ -120,6 +171,10 @@ export default function DayView({
   const idleMs = report?.rollup.idleMs ?? 0;
   const screenMs = (report?.rollup.activeMs ?? 0) + idleMs;
   const share = (ms: number) => (screenMs > 0 ? Math.round((ms / screenMs) * 100) : 0);
+
+  const recorded = report?.rollup.apps ?? [];
+  const apps = recorded.filter((app) => app.activeMs >= MIN_APP_MS);
+  const brief = recorded.length - apps.length;
 
   return (
     <section aria-label="Day view">
@@ -219,6 +274,84 @@ export default function DayView({
         )}
       </section>
 
+      <section className="panel" aria-label="Ask about this day">
+        <div className="panel__head">
+          <h3 className="panel__title">Ask about this day</h3>
+          {turns.length > 0 ? (
+            <div className="panel__actions">
+              <button
+                type="button"
+                className="button button--quiet"
+                disabled={asking}
+                onClick={() => {
+                  setTurns([]);
+                  setAskError(null);
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        {!ready && readiness?.blockedBy ? (
+          <p className="panel__hint">{readiness.blockedBy}</p>
+        ) : null}
+
+        {turns.length === 0 ? (
+          <p className="empty">
+            Ask what took the morning, what a file was, or why something kept coming back.
+            Answers are drawn from this day's record and nothing else.
+          </p>
+        ) : (
+          <ol className="chat">
+            {turns.map((turn, index) => (
+              <li key={index} className="chat__turn">
+                <p className="chat__asked">{turn.asked}</p>
+                <div className="chat__answered">
+                  {paragraphs(turn.answered).map((para, para_index) => (
+                    <p key={para_index}>{para}</p>
+                  ))}
+                </div>
+                {/* Which model answered, because a conversation can outlive a change of
+                    model and an answer should not be read as coming from the current one. */}
+                <p className="chat__by">Answered by {turn.model}.</p>
+              </li>
+            ))}
+          </ol>
+        )}
+
+        {askError ? (
+          <p className="notice notice--error" role="alert">
+            {askError}
+          </p>
+        ) : null}
+
+        <form className="chat__ask" onSubmit={ask}>
+          <input
+            type="text"
+            className="input"
+            value={question}
+            placeholder="What was I working on before lunch?"
+            aria-label="Your question"
+            disabled={!ready || asking}
+            onChange={(event) => setQuestion(event.target.value)}
+          />
+          <button
+            type="submit"
+            className="button"
+            disabled={!ready || asking || question.trim() === ""}
+          >
+            {asking ? "Asking…" : "Ask"}
+          </button>
+        </form>
+
+        <p className="panel__hint">
+          The question and this day's record go to whichever model writes the summaries.
+          Nothing about the conversation is kept: leaving the day ends it.
+        </p>
+      </section>
+
       <section className="panel" aria-label="Hours">
         <h3 className="panel__title">Hours</h3>
         {hours.length === 0 ? (
@@ -285,31 +418,38 @@ export default function DayView({
             </p>
           ) : null}
         </div>
-        {report && report.rollup.apps.length > 0 ? (
+        {report && recorded.length > 0 ? (
           <>
-            <ol className="apps">
-              {report.rollup.apps.map((app) => (
-                <li key={app.app} className="app">
-                  <span className="app__name">{app.app}</span>
-                  <span className="app__bar">
-                    <span className="app__fill" style={{ width: `${share(app.activeMs)}%` }} />
-                  </span>
-                  <span className="app__active">{duration(app.activeMs)}</span>
-                </li>
-              ))}
-              {idleMs > 0 ? (
-                <li className="app app--idle">
-                  <span className="app__name">Idle</span>
-                  <span className="app__bar">
-                    <span className="app__fill" style={{ width: `${share(idleMs)}%` }} />
-                  </span>
-                  <span className="app__active">{duration(idleMs)}</span>
-                </li>
-              ) : null}
-            </ol>
+            {apps.length === 0 && idleMs === 0 ? (
+              <p className="empty">Nothing was in front for longer than a minute.</p>
+            ) : (
+              <ol className="apps">
+                {apps.map((app) => (
+                  <li key={app.app} className="app">
+                    <span className="app__name">{app.app}</span>
+                    <span className="app__bar">
+                      <span className="app__fill" style={{ width: `${share(app.activeMs)}%` }} />
+                    </span>
+                    <span className="app__active">{duration(app.activeMs)}</span>
+                  </li>
+                ))}
+                {idleMs > 0 ? (
+                  <li className="app app--idle">
+                    <span className="app__name">Idle</span>
+                    <span className="app__bar">
+                      <span className="app__fill" style={{ width: `${share(idleMs)}%` }} />
+                    </span>
+                    <span className="app__active">{duration(idleMs)}</span>
+                  </li>
+                ) : null}
+              </ol>
+            )}
             <p className="panel__hint">
               Idle is time a window sat in front with nothing happening. It belongs to no
               application. Time while the screen was locked or asleep is in neither figure.
+              {brief > 0
+                ? ` ${brief} application${brief === 1 ? "" : "s"} in front for under a minute ${brief === 1 ? "is" : "are"} counted in the totals but not listed.`
+                : ""}
             </p>
           </>
         ) : (
