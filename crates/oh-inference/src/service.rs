@@ -21,6 +21,7 @@ use chrono::NaiveDate;
 use oh_core::summary::now;
 use oh_core::{Config, DaySummary, HourSummary, InferenceProvider, SummaryStore};
 use oh_processing::DayReport;
+use oh_processing::attention;
 
 use crate::anthropic::AnthropicProvider;
 use crate::google::GoogleProvider;
@@ -270,7 +271,14 @@ impl InferenceService {
         // The day is rewritten whenever an hour changed, because it is a summary of
         // the hours and a stale one would contradict them.
         let day_is_stale = rewrite || !run.hours_written.is_empty() || summary.daily.is_none();
-        if day_is_stale && let Some(prompt) = day_prompt(date, &report.rollup, &summary.hours) {
+        if day_is_stale
+            && let Some(prompt) = day_prompt(
+                date,
+                &report.rollup,
+                &summary.hours,
+                &attention::measure_all(&report.episodes),
+            )
+        {
             match self.generate(config, prompt).await {
                 Ok(completion) => {
                     summary.set_daily(completion.text);

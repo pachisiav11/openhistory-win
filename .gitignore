@@ -37,3 +37,7 @@ desktop.ini
 # Test output
 /test-output
 *.jsonl.tmp
+
+# Luna draft answers. They quote the machine's own history — window titles, document
+# names and on-screen text — so they stay on the machine that produced them.
+/drafts

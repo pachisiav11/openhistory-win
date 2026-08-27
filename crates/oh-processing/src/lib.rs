@@ -4,12 +4,14 @@
 //! episodes, measures where the time went, and builds a search index — all as plain
 //! functions over data, which is what makes the whole layer testable from fixtures.
 
+pub mod attention;
 pub mod day;
 pub mod episode;
 pub mod index;
 pub mod redact;
 pub mod rollup;
 
+pub use attention::{Alternation, AppAttention, Attention, Interruption, Thread};
 pub use day::{DayReport, Processor};
 pub use episode::{ACTIVE_GAP, Episode, IDLE_SPLIT, detect_episodes};
 pub use index::{IndexedEpisode, SearchHit, SearchIndex};

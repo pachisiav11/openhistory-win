@@ -37,11 +37,16 @@ interface Props {
 
 /// The least time an application must hold to be worth a row of its own.
 ///
-/// Under a minute is a window that was touched, not work that was done, and a row in
-/// this list gives it the same standing as the hours of real work above it. The same
-/// floor is applied to the episodes that go into a prompt, so the list and the written
-/// summary now agree about what counted. The totals in the panel head are untouched:
-/// the time is still counted, it is only not named.
+/// An application with under a minute to its name across the whole day was touched, not
+/// worked in, and a row here would give it the same standing as the hours above it. The
+/// totals in the panel head are untouched: the time is still counted, it is only not
+/// named.
+///
+/// This is a floor on a whole day's use of one application, which is why it survives
+/// where the prompts' per-episode floor did not. An application entered a hundred times
+/// for four seconds still clears a minute in total and still gets its row; what the
+/// prompts had to stop doing was judging each of those visits on its own. See
+/// `oh_processing::attention`.
 const MIN_APP_MS = 60_000;
 
 /** One exchange, with the model that answered it. */
