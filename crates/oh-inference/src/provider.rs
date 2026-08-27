@@ -19,10 +19,10 @@ pub const LOCAL_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long Google is given, which is longer than the other two clouds.
 ///
 /// Gemini reasons before it answers, and that reasoning is generated on the same
-/// request as the summary — `google.rs` buys it 4,000 tokens of headroom that neither
-/// Anthropic nor OpenAI is asked for. Sixty seconds is enough for the summary and not
-/// reliably enough for the thinking that precedes it, which is how a working
-/// configuration produced "google did not answer within 60s".
+/// request as the summary — `google.rs` gives it a thinking budget neither Anthropic
+/// nor OpenAI is asked for. Sixty seconds is enough for the summary and not reliably
+/// enough for the thinking that precedes it, which is how a working configuration
+/// produced "google did not answer within 60s".
 pub const GOOGLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, thiserror::Error)]
@@ -58,6 +58,16 @@ pub enum InferenceError {
     /// The provider answered with nothing usable.
     #[error("{provider} returned an empty summary")]
     Empty { provider: &'static str },
+    /// The provider stopped before it had written anything worth keeping.
+    ///
+    /// Distinct from `Empty`, which is a model that had nothing to say. This is a model
+    /// that was cut off — the usual cause is a reasoning pass that spent the whole token
+    /// allowance before the answer began — and the two want different remedies.
+    #[error("{provider} stopped early: {reason}")]
+    Truncated {
+        provider: &'static str,
+        reason: String,
+    },
 }
 
 impl InferenceError {
