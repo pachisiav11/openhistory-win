@@ -1,7 +1,61 @@
 # Handoff — OpenHistory for Windows
 
-Last updated 2026-08-24, after the document-label fix, the Chromium capture fix and the
-termination race. Read this before touching anything, and read the next section first.
+Last updated 2026-08-27, after the Gemini thinking budget, the sub-minute application
+filter and the day chat. Read this before touching anything, and read the next section
+first.
+
+## Stopping point, 2026-08-27
+
+Three items from the Google task `fix openhistory-win`, all landed. The fourth on that
+task — the NSIS silent-install hang — was not touched, at the user's direction, and is
+still the only line in `todo.md`. Everything below was run and passed on this tree:
+`cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo test --workspace` (328 passed, 0 failed), `npx tsc --noEmit`, `npm test`
+(89 passed) and `npm run build`. The two ignored desktop gates — `live_desktop` and
+`persistence` — were **not** run this session: nothing here touches the collector.
+
+The changes were also driven end to end in a browser tab against `browser-mocks.ts`:
+a question asked and answered, a second question carrying the first back with it, the
+conversation cleared by moving to another day, and the sub-minute row absent from the
+list with its time still in the totals.
+
+**What changed.**
+
+1. **Gemini is given a thinking budget rather than a flat headroom.** It used to get
+   `max_tokens + 4000` and nothing dividing the two, so a long reasoning pass could
+   spend the summary's share as well as its own and return a candidate with no text —
+   reported as "google returned an empty summary", which is the AD-33 failure again on
+   a different provider. Requests now carry `thinkingConfig.thinkingBudget` of twice the
+   summary's `max_tokens`, held between 1,024 and 8,192, with the summary's own tokens
+   added on top. Thinking is bounded, never zero: the user asked for it to be kept, and
+   the day prompt's two paragraphs of analysis are what it buys. A model that rejects
+   the field is retried once on the old headroom; a 400 about anything else is not.
+   `finishReason` is read, and an empty answer at the ceiling is the new
+   `InferenceError::Truncated` rather than `Empty`. See AD-37.
+2. **An application in front for under a minute is left out of "Where the time went".**
+   The floor is the one `prompt.rs` already applies to the episodes it lists, so the
+   panel and the writing about it now agree on what counted. Totals are untouched and
+   the hint says how many rows were dropped.
+3. **A day can be asked about.** A chat panel on the Day view puts a question to
+   whichever model writes the summaries, with the day's hours, its written summary and
+   its episodes as context — the episodes because a question can be about a moment no
+   hourly summary named. `InferenceService::chat`, `prompt::chat_prompt`, and the
+   `chat_about_day` command. It stands behind the summariser's readiness gate, and every
+   episode still goes through `PublicEpisode`, so the new path inherits the redaction
+   rather than needing its own. Nothing about a conversation is stored. See AD-38.
+
+**Worth knowing before the next change.**
+
+- The Gemini budget is the documented mechanism, not a hard guarantee: `thinkingBudget`
+  is a target the model works to. It has never been exercised against the real API here
+  — AD-7 still holds, and the tests speak to a local server that returns the vendor's
+  shapes. If empty summaries survive this, the next lever is lowering the multiplier,
+  not reaching for `thinkingBudget: 0`.
+- `InferenceError::Truncated` is new and is **not** transient. `generate` would resend
+  the identical request and get the identical answer.
+- The chat prompt sends the whole day with every question. Only the last eight exchanges
+  are carried back, which is the bound that matters; a very long conversation is cheap
+  in history and expensive in day.
 
 ## Stopping point, 2026-08-24
 

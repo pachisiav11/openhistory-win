@@ -414,6 +414,29 @@ export const summarizeHour = (date: string, hour: number) =>
   invoke<HourSummary>("summarize_hour", { date, hour });
 export const forgetSummary = (date: string) => invoke<void>("forget_summary", { date });
 
+/** One exchange already in a conversation about a day. */
+export interface ChatTurn {
+  asked: string;
+  answered: string;
+}
+
+/** One answer from the summariser. */
+export interface ChatReply {
+  text: string;
+  /** The model that wrote this answer, which may not be the one now selected. */
+  model: string;
+}
+
+/**
+ * Ask the summariser about a day.
+ *
+ * The transcript travels with the question rather than being held by the backend:
+ * nothing about a conversation is written to disk, so the window is the only place it
+ * exists.
+ */
+export const chatAboutDay = (date: string, question: string, turns: ChatTurn[]) =>
+  invoke<ChatReply>("chat_about_day", { date, question, turns });
+
 export const localServerStatus = () => invoke<LlamaStatus>("local_server_status");
 export const stopLocalServer = () => invoke<LlamaStatus>("stop_local_server");
 

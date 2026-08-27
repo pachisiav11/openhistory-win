@@ -11,10 +11,11 @@
 //! executable path or a query string cannot reach a provider by accident.
 
 use chrono::{DateTime, Local, NaiveDate, Timelike};
-use oh_core::HourSummary;
+use oh_core::{DaySummary, HourSummary};
 use oh_processing::redact::PublicEpisode;
 use oh_processing::rollup::{DailyRollup, HourlyRollup, human_duration};
 use oh_processing::{DayReport, Episode};
+use serde::{Deserialize, Serialize};
 
 /// The instruction both prompts share.
 pub const SYSTEM: &str = "You summarize a person's computer activity from a log of \
@@ -224,6 +225,207 @@ amounted to.",
         user,
         max_tokens: 1_200,
     })
+}
+
+/// The instruction for answering a question about a day rather than summarizing it.
+///
+/// It shares the summariser's discipline — name what is there, invent nothing, leave
+/// interface furniture alone — and departs from it in the two ways a conversation
+/// needs. A question can be answered in whatever length the answer takes rather than a
+/// fixed one, and a question the log cannot answer has to be refused outright. A model
+/// that will not say "the log does not record that" will guess instead, and a guess
+/// about a person's own day is worse than a refusal because they cannot tell the two
+/// apart.
+pub const CHAT_SYSTEM: &str = "You answer questions about a person's own computer \
+activity, from a log of which applications and windows they had in front of them. The \
+log below is everything you know. Answer only from it. Where it does not carry the \
+answer, say plainly that it does not record that, and stop — never fill the gap with \
+what usually happens, what probably happened, or what would be reasonable. Be \
+concrete: name the applications, files, pages and topics in the log, and give times \
+and durations where they answer the question. Entries marked as private sessions are \
+time in an application and nothing more; never guess what they contained. Window \
+controls, menu and toolbar labels and other interface furniture are not activity, and \
+are not evidence about one. Where an entry reports what was on screen, that is \
+evidence like any other: use it to say what a document, page or conversation was \
+about, from the words recorded and never from what a name like that usually means. Do \
+not characterize the day in general terms — no \"a productive session\", no \"a mix of \
+tasks\". Answer at whatever length the question takes: a question about one moment \
+wants a sentence, and one about the shape of the day wants a paragraph. Write prose, \
+with no headings and no preamble. The person asking is the person the log is about, so \
+write to them as \"you\".";
+
+/// One exchange already in the conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurn {
+    pub asked: String,
+    pub answered: String,
+}
+
+/// The most exchanges carried back into a new question.
+///
+/// The day itself is the bulk of the prompt and it is sent again with every question,
+/// so the history is what has to be bounded. Eight is more than a conversation about
+/// one day has needed, and it still leaves the day room.
+const MAX_CHAT_TURNS: usize = 8;
+
+/// The most episodes laid out for one day.
+///
+/// A day of real work runs to a few dozen once the sub-minute switches are dropped.
+/// The cap is what stops a day of constant alt-tabbing from crowding out the question.
+const MAX_CHAT_EPISODES: usize = 120;
+
+/// The prompt for one question about one day.
+///
+/// Unlike the day summary, which reads the hours because a day of episodes is more
+/// than a small model can hold, this reads both. A question can be about a moment the
+/// hourly summaries never named, and the episodes are the only place that moment
+/// exists; the written summary is included as well, where there is one, so that an
+/// answer does not contradict what the person is reading above it.
+pub fn chat_prompt(
+    date: NaiveDate,
+    report: &DayReport,
+    summary: &DaySummary,
+    turns: &[ChatTurn],
+    question: &str,
+) -> Prompt {
+    let rollup = &report.rollup;
+    let mut user = format!(
+        "Activity for {}, {} active in total across {} sessions.\n\n",
+        date.format("%A %-d %B %Y"),
+        human_duration(rollup.active_ms),
+        rollup.episodes,
+    );
+
+    if let Some(daily) = &summary.daily {
+        user.push_str(&format!(
+            "The summary already written for this day:\n{}\n\n",
+            daily.trim()
+        ));
+    }
+
+    if !summary.hours.is_empty() {
+        user.push_str("Hour by hour:\n");
+        for hour in &summary.hours {
+            user.push_str(&format!(
+                "{:02}:00 ({}) — {}\n",
+                hour.hour,
+                human_duration(hour.active_ms),
+                hour.text.trim()
+            ));
+        }
+        user.push('\n');
+    }
+
+    let worth_naming: Vec<&Episode> = report
+        .episodes
+        .iter()
+        .filter(|episode| episode.active_ms >= MIN_EPISODE_MS)
+        .collect();
+
+    if worth_naming.is_empty() {
+        user.push_str("Nothing was in front for longer than a minute on this day.\n\n");
+    } else {
+        user.push_str("What was in front, in the order it happened:\n");
+        for episode in worth_naming.iter().take(MAX_CHAT_EPISODES) {
+            user.push_str(&render_episode_in_day(&PublicEpisode::from(*episode)));
+        }
+        if worth_naming.len() > MAX_CHAT_EPISODES {
+            user.push_str(&format!(
+                "\n({} further entries are not listed.)\n",
+                worth_naming.len() - MAX_CHAT_EPISODES
+            ));
+        }
+        let brief = report.episodes.len() - worth_naming.len();
+        if brief > 0 {
+            user.push_str(&format!(
+                "\n({brief} briefer switches, each under a minute, are counted in the \
+                 total above but are not listed: they were not worked in.)\n"
+            ));
+        }
+        user.push('\n');
+    }
+
+    if !rollup.apps.is_empty() {
+        let leaders: Vec<String> = rollup
+            .apps
+            .iter()
+            .take(8)
+            .map(|usage| format!("{} ({})", usage.app, human_duration(usage.active_ms)))
+            .collect();
+        user.push_str(&format!("Time by application: {}.\n\n", leaders.join(", ")));
+    }
+    if rollup.private_episodes > 0 {
+        user.push_str(&format!(
+            "{} private sessions were recorded as time only.\n\n",
+            rollup.private_episodes
+        ));
+    }
+
+    // Only the tail is carried. The day above it is what the answer is drawn from, and
+    // an old exchange is worth less than the room it takes.
+    let carried = turns.len().saturating_sub(MAX_CHAT_TURNS);
+    if carried < turns.len() {
+        user.push_str("Earlier in this conversation:\n");
+        for turn in &turns[carried..] {
+            user.push_str(&format!(
+                "They asked: {}\nYou answered: {}\n",
+                turn.asked.trim(),
+                turn.answered.trim()
+            ));
+        }
+        user.push('\n');
+    }
+
+    user.push_str(&format!(
+        "Their question: {}\n\nAnswer it from the log above. If the log does not record \
+what they are asking about, say so rather than supplying an answer.",
+        question.trim()
+    ));
+
+    Prompt {
+        system: CHAT_SYSTEM.to_owned(),
+        user,
+        max_tokens: 800,
+    }
+}
+
+/// One episode as a line in a whole day's list.
+///
+/// [`render_episode`] describes an episode relative to the hour it is filed under,
+/// which is meaningless here: this list is the day in order, and every entry belongs
+/// to it.
+fn render_episode_in_day(episode: &PublicEpisode) -> String {
+    let when = format!(
+        "{} ({})",
+        local_clock(&episode.start),
+        human_duration(episode.active_ms)
+    );
+
+    if episode.is_private {
+        return format!(
+            "- {when} {} — private session, nothing recorded\n",
+            episode.app
+        );
+    }
+
+    let mut line = match &episode.title {
+        Some(title) => format!("- {when} {}: {title}\n", episode.app),
+        None => format!("- {when} {}\n", episode.app),
+    };
+    if !episode.urls.is_empty() {
+        line.push_str(&format!("    visited: {}\n", episode.urls.join(", ")));
+    }
+    if !episode.documents.is_empty() {
+        line.push_str(&format!("    document: {}\n", episode.documents.join(", ")));
+    }
+    if !episode.visible_text.is_empty() {
+        line.push_str(&format!(
+            "    on screen: {}\n",
+            episode.visible_text.join(" · ")
+        ));
+    }
+    line
 }
 
 /// The local clock time of a stored stamp, as the person sitting there read it.
@@ -608,5 +810,168 @@ mod tests {
                 .user
                 .contains("serving the main work or displacing it")
         );
+    }
+
+    fn day_report(episodes: Vec<Episode>) -> DayReport {
+        DayReport {
+            date: "2026-08-22".into(),
+            episodes,
+            rollup: rollup(),
+        }
+    }
+
+    fn day_summary(daily: Option<&str>) -> DaySummary {
+        DaySummary {
+            date: "2026-08-22".into(),
+            daily: daily.map(str::to_owned),
+            daily_generated_at: None,
+            hours: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_chat_prompt_carries_the_day_and_the_question() {
+        let report = day_report(vec![episode(
+            "Visual Studio Code",
+            Some("collector.rs"),
+            900_000,
+        )]);
+        let prompt = chat_prompt(
+            date(),
+            &report,
+            &day_summary(None),
+            &[],
+            "  What took the morning?  ",
+        );
+
+        assert_eq!(prompt.system, CHAT_SYSTEM);
+        assert!(
+            prompt.user.contains("Saturday 22 August 2026"),
+            "{}",
+            prompt.user
+        );
+        assert!(prompt.user.contains("collector.rs"), "{}", prompt.user);
+        // Trimmed, and asked as the question rather than pasted in raw.
+        assert!(
+            prompt
+                .user
+                .contains("Their question: What took the morning?"),
+            "{}",
+            prompt.user
+        );
+    }
+
+    /// The redaction is structural: every episode goes through `PublicEpisode`, so an
+    /// executable path cannot reach a provider even from this new path in.
+    #[test]
+    fn a_chat_prompt_never_carries_an_executable_path() {
+        let report = day_report(vec![episode(
+            "Visual Studio Code",
+            Some("collector.rs"),
+            900_000,
+        )]);
+        let prompt = chat_prompt(date(), &report, &day_summary(None), &[], "What happened?");
+
+        assert!(
+            !prompt.user.contains(r"C:\Users\someone"),
+            "{}",
+            prompt.user
+        );
+    }
+
+    /// The same floor the summaries use, so an answer and the list a person is reading
+    /// beside it agree about what counted.
+    #[test]
+    fn a_chat_prompt_leaves_out_what_was_touched_for_under_a_minute() {
+        let report = day_report(vec![
+            episode("Visual Studio Code", Some("collector.rs"), 900_000),
+            episode("Calculator", Some("Calculator"), 20_000),
+        ]);
+        let prompt = chat_prompt(date(), &report, &day_summary(None), &[], "What happened?");
+
+        assert!(prompt.user.contains("collector.rs"), "{}", prompt.user);
+        assert!(!prompt.user.contains("Calculator"), "{}", prompt.user);
+        assert!(
+            prompt.user.contains("1 briefer switches"),
+            "the time is still accounted for: {}",
+            prompt.user
+        );
+    }
+
+    /// An answer that contradicted the summary on the same screen would be worse than
+    /// no answer, so the summary goes in where there is one.
+    #[test]
+    fn a_written_summary_goes_in_with_the_question() {
+        let report = day_report(vec![episode("Visual Studio Code", None, 900_000)]);
+        let prompt = chat_prompt(
+            date(),
+            &report,
+            &day_summary(Some("A morning of Rust.")),
+            &[],
+            "What happened?",
+        );
+
+        assert!(
+            prompt.user.contains("A morning of Rust."),
+            "{}",
+            prompt.user
+        );
+    }
+
+    #[test]
+    fn only_the_last_few_exchanges_are_carried_back() {
+        let report = day_report(vec![episode("Visual Studio Code", None, 900_000)]);
+        let turns: Vec<ChatTurn> = (0..12)
+            .map(|n| ChatTurn {
+                asked: format!("question {n}"),
+                answered: format!("answer {n}"),
+            })
+            .collect();
+
+        let prompt = chat_prompt(date(), &report, &day_summary(None), &turns, "And now?");
+
+        // Twelve asked, eight carried: the four oldest are dropped from the front.
+        assert!(!prompt.user.contains("question 3"), "{}", prompt.user);
+        assert!(prompt.user.contains("question 4"), "{}", prompt.user);
+        assert!(prompt.user.contains("question 11"), "{}", prompt.user);
+        assert!(prompt.user.contains("answer 11"), "{}", prompt.user);
+    }
+
+    #[test]
+    fn a_day_with_nothing_in_it_says_so_rather_than_listing_nothing() {
+        let prompt = chat_prompt(
+            date(),
+            &day_report(Vec::new()),
+            &day_summary(None),
+            &[],
+            "What happened?",
+        );
+
+        assert!(
+            prompt
+                .user
+                .contains("Nothing was in front for longer than a minute"),
+            "{}",
+            prompt.user
+        );
+    }
+
+    /// A private session is time in an application and nothing else, on this path as
+    /// much as on the summariser's.
+    #[test]
+    fn a_private_session_is_time_and_nothing_else() {
+        let mut hidden = episode("Signal", Some("A conversation"), 900_000);
+        hidden.is_private = true;
+        let prompt = chat_prompt(
+            date(),
+            &day_report(vec![hidden]),
+            &day_summary(None),
+            &[],
+            "What happened?",
+        );
+
+        assert!(prompt.user.contains("Signal"), "{}", prompt.user);
+        assert!(!prompt.user.contains("A conversation"), "{}", prompt.user);
+        assert!(prompt.user.contains("private session"), "{}", prompt.user);
     }
 }

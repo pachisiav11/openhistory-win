@@ -1160,3 +1160,91 @@ A line that names a file location is now dropped from screen text entirely. An E
 window publishes the `file://` address of its own bundle as its document's name, which
 put an executable path into the timeline through the one field that had no guard
 against it.
+
+## AD-37: Gemini's thinking is bounded, not switched off
+
+**Decision.** Every request to Google carries an explicit
+`generationConfig.thinkingConfig.thinkingBudget`, and `maxOutputTokens` is that budget
+plus the summary's own `max_tokens` rather than the summary's budget plus a flat
+allowance. The budget is twice what the summary asks for, held between 1,024 and 8,192
+tokens. `finishReason` is read, and an answer that came back empty at the ceiling is
+reported as having been cut off rather than as silence.
+
+**Why.** Gemini reasons before it answers and charges that reasoning against the same
+`maxOutputTokens` as the answer. The provider used to ask for the summary's budget plus
+4,000 unconditional tokens of headroom, which is a guess at how much the thinking will
+want and cannot be anything else: nothing in the request divided the two, so a long
+reasoning pass — which runs first — could spend the summary's share as well as its own
+and return a candidate with `finishReason: MAX_TOKENS` and no text in it. The four-
+paragraph day prompt, which asks for roughly 500 words of analysis, is exactly the
+prompt that provokes the longest reasoning. `finishReason` was never read, so the run
+surfaced as "google returned an empty summary" — accurate, and no help at all, which is
+the same failure AD-33 describes on the local provider.
+
+Asking for the budget explicitly is what makes the ceiling safe. The thinking is capped
+at what it was given and the answer's tokens sit on top of it, so the summary keeps its
+full length however long the reasoning runs.
+
+The obvious fix is `thinkingBudget: 0`, and it is the wrong one. AD-33 turns thinking
+off for the local model because summarizing window titles does not reward deliberation
+and a small model cannot afford it. Neither reason survives here. The day prompt no
+longer asks for a summary; it asks for two paragraphs of argument about what competed
+for a stretch of time and which reading of it the evidence favours, and reasoning is how
+Gemini arrives at that. A cloud model's budget is also not the scarce resource a 2B
+local model's is. The two providers are treated differently because they are being asked
+different questions.
+
+**Consequence.** A model that does not recognise `thinkingConfig` — the catalog holds a
+moving alias, and Google swings it to each new Flash release — rejects the request with
+a 400 naming the field. That one case is retried once without the budget, falling back
+to the old headroom, which is why `THINKING_HEADROOM` still exists. A 400 about anything
+else is the error it says it is and is not retried; asking again without the budget would
+only bury an invalid key behind a second failure.
+
+A truncation is now `InferenceError::Truncated` rather than `Empty`. The two want
+different remedies — one needs more room, the other had nothing to say — and a person
+reading the failure in the interface can only act on the difference if the message
+carries it. It is not transient: the retry in `InferenceService::generate` would send
+the identical request and get the identical answer.
+
+## AD-38: A day can be asked about, and the conversation is not kept
+
+**Decision.** The Day view carries a chat panel that puts a question to whichever model
+writes the summaries, with that day as its context. The transcript lives in the window.
+It travels back to the backend with each question and is written nowhere.
+
+**Why.** A summary is a fixed answer to a question nobody asked. It says what the day
+amounted to, at the length the prompt specified, and a person who wants to know which of
+two files the afternoon actually went to has no way to ask. The episodes hold that — the
+summariser reads the hours precisely because a day of episodes is more than a small model
+can hold — so the material for the answer already exists and only the question was
+missing.
+
+The chat prompt therefore reads both, unlike `day_prompt`: the hours and the written
+summary, so an answer does not contradict what the person is reading above it, and the
+episodes, because a question can be about a moment no hourly summary ever named. Every
+episode still passes through `PublicEpisode`, so this new path in inherits the structural
+redaction of AD-14 rather than needing a guard of its own, and a private session is time
+in an application here exactly as it is everywhere else.
+
+It stands behind the summariser's readiness gate rather than one of its own. It is the
+same model, the same key and the same consent, and a second gate would be a second thing
+to get wrong.
+
+**Consequence.** Nothing about a conversation is stored. AD-25 makes a saved day a
+document the application will not delete; a question somebody asked about a Tuesday
+afternoon is not that, and writing it beside the summaries would make the history of
+what a person wondered about part of the record they keep. Leaving the day ends the
+conversation, which is the honest reading of where it lives.
+
+The system prompt is its own, not the summariser's. It shares the discipline — name what
+is there, invent nothing, interface furniture is not activity — and departs on the two
+points a conversation needs: an answer runs to whatever length the question takes rather
+than a fixed one, and a question the log cannot answer has to be refused outright. A
+model that will not say "the log does not record that" will guess instead, and a guess
+about a person's own day is worse than a refusal, because they are the one person who
+cannot check it against anything but memory.
+
+Only the last eight exchanges are carried back. The day itself is the bulk of the prompt
+and it is sent again with every question, so the history is what has to be bounded.
+

@@ -32,7 +32,7 @@ pub use download::{Cancel, DownloadError, Progress, ProgressListener, fetch_mode
 pub use google::GoogleProvider;
 pub use llama::{LlamaOptions, LlamaServer, LlamaStatus};
 pub use openai::OpenAiProvider;
-pub use prompt::{Prompt, day_prompt, hour_prompt};
+pub use prompt::{ChatTurn, Prompt, chat_prompt, day_prompt, hour_prompt};
 pub use provider::{Completion, InferenceError, Request};
 pub use secrets::{SECRETS, Secret};
 pub use service::{InferenceService, Readiness, RunReport};

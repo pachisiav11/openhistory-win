@@ -139,6 +139,12 @@ them is idle — a window in front with nothing happening — and it is listed a
 row rather than credited to whatever application happened to be open. Time while the
 screen was locked or asleep is in neither figure; being away is not being idle.
 
+An application that was in front for under a minute is left out of that list. It was a
+window touched rather than work done, and a row of its own would give it the standing of
+the hours above it. Its time is still in both totals; the panel says how many were left
+out. The summariser has always applied the same floor to the entries it is given, so the
+list and the writing about it now agree on what counted.
+
 A search result opens the day it came from at the hour it happened in, with that hour
 marked, so a match found in a fortnight of history is one click from its context.
 
@@ -169,6 +175,18 @@ private title by accident.
 
 You can write a whole day or a single hour, rewrite either, or forget a day's summaries
 entirely. Each summary records which model wrote it.
+
+### Asking about a day
+
+A summary is a fixed answer to a question nobody asked. The Day view also has a chat
+panel, which puts a question to the same model with that day as its context: the hours,
+the summary if one has been written, and the episodes behind them — so you can ask about
+a moment no summary ever named. It is told to answer from the record and to say when the
+record does not carry the answer, rather than supply one.
+
+Nothing about the conversation is kept. The transcript lives in the window and goes back
+with each question; moving to another day starts a new one. What is sent is what a
+summary sends, redacted the same way.
 
 ### Keeping a day
 

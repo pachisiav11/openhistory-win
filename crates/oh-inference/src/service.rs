@@ -1,8 +1,9 @@
-//! Writing a day's summaries.
+//! Writing a day's summaries, and answering questions about one.
 //!
-//! One entry point, [`InferenceService::summarize_day`], which fills in the hours that
-//! do not have a summary yet and then writes the day. Everything it needs comes from a
-//! [`DayReport`] and the stored [`DaySummary`]; it never reads the event log.
+//! [`InferenceService::summarize_day`] fills in the hours that do not have a summary
+//! yet and then writes the day, and [`InferenceService::chat`] puts a question about a
+//! day to the same model. Everything either needs comes from a [`DayReport`] and the
+//! stored [`DaySummary`]; neither reads the event log.
 //!
 //! Two properties matter more than speed here:
 //!
@@ -25,7 +26,7 @@ use crate::anthropic::AnthropicProvider;
 use crate::google::GoogleProvider;
 use crate::llama::{LlamaOptions, LlamaServer, LlamaStatus};
 use crate::openai::OpenAiProvider;
-use crate::prompt::{day_prompt, episodes_in_hour, hour_prompt};
+use crate::prompt::{ChatTurn, chat_prompt, day_prompt, episodes_in_hour, hour_prompt};
 use crate::provider::{CLOUD_TIMEOUT, Completion, GOOGLE_TIMEOUT, InferenceError, Request};
 use crate::secrets::{self, Secret};
 
@@ -224,19 +225,7 @@ impl InferenceService {
         let date = NaiveDate::parse_from_str(&report.date, "%Y-%m-%d")
             .map_err(|_| InferenceError::NotConfigured(format!("{} is not a date", report.date)))?;
 
-        let readiness = self.readiness(config);
-        if !readiness.ready {
-            return Err(match config.inference.provider {
-                cloud if cloud.is_cloud() && !config.inference.cloud_consent => {
-                    InferenceError::ConsentMissing
-                }
-                _ => InferenceError::NotConfigured(
-                    readiness
-                        .blocked_by
-                        .unwrap_or_else(|| "summaries are not configured".into()),
-                ),
-            });
-        }
+        self.require_ready(config)?;
 
         let mut summary = self.store.load(date);
         let mut run = RunReport {
@@ -335,6 +324,59 @@ impl InferenceService {
         summary.set_hour(written.clone());
         self.save(&summary)?;
         Ok(written)
+    }
+
+    /// Answer one question about a day, from the day itself.
+    ///
+    /// The chat stands behind the summariser's readiness gate rather than one of its
+    /// own, because it is the same model, the same key and the same consent: a question
+    /// about a day is put to whatever writes that day's summaries.
+    ///
+    /// Nothing is stored. A summary is a document the person keeps and a conversation
+    /// is not, so the transcript lives in the window that asked and the history comes
+    /// back in with the next question.
+    pub async fn chat(
+        &self,
+        config: &Config,
+        report: &DayReport,
+        turns: &[ChatTurn],
+        question: &str,
+    ) -> Result<Completion, InferenceError> {
+        let question = question.trim();
+        if question.is_empty() {
+            return Err(InferenceError::NotConfigured(
+                "there is no question to answer".into(),
+            ));
+        }
+
+        let date = NaiveDate::parse_from_str(&report.date, "%Y-%m-%d")
+            .map_err(|_| InferenceError::NotConfigured(format!("{} is not a date", report.date)))?;
+
+        self.require_ready(config)?;
+
+        let summary = self.store.load(date);
+        let prompt = chat_prompt(date, report, &summary, turns, question);
+        self.generate(config, prompt).await
+    }
+
+    /// Refuse early, and with the reason the interface would have shown, when nothing
+    /// is configured to answer.
+    fn require_ready(&self, config: &Config) -> Result<(), InferenceError> {
+        let readiness = self.readiness(config);
+        if readiness.ready {
+            return Ok(());
+        }
+
+        Err(match config.inference.provider {
+            cloud if cloud.is_cloud() && !config.inference.cloud_consent => {
+                InferenceError::ConsentMissing
+            }
+            _ => InferenceError::NotConfigured(
+                readiness
+                    .blocked_by
+                    .unwrap_or_else(|| "summaries are not configured".into()),
+            ),
+        })
     }
 
     /// Discard everything written about a day.
@@ -985,6 +1027,104 @@ mod tests {
             "{sent}"
         );
         assert_eq!(service.summary(date()).hour(9).unwrap().provider, "google");
+    }
+
+    #[tokio::test]
+    async fn a_question_about_a_day_is_answered_from_that_day() {
+        let server =
+            FakeHttp::serving(200, &answer("You spent the morning in the collector.")).await;
+        point_cloud_at(&server.base_url());
+
+        let temp = tempfile::tempdir().unwrap();
+        let service = InferenceService::in_dir(temp.path()).unwrap();
+
+        let reply = service
+            .chat(&cloud_config(), &report(), &[], "What took the morning?")
+            .await
+            .unwrap();
+
+        assert_eq!(reply.text, "You spent the morning in the collector.");
+        let sent = server.last_request();
+        assert!(sent.contains("What took the morning?"), "{sent}");
+        assert!(sent.contains("Visual Studio Code"), "{sent}");
+    }
+
+    /// A conversation is not a document. Nothing about it is written beside the
+    /// summaries, and asking a question does not disturb what is already there.
+    #[tokio::test]
+    async fn asking_a_question_writes_nothing_to_the_store() {
+        let server = FakeHttp::serving(200, &answer("It went well.")).await;
+        point_cloud_at(&server.base_url());
+
+        let temp = tempfile::tempdir().unwrap();
+        let service = InferenceService::in_dir(temp.path()).unwrap();
+
+        service
+            .chat(&cloud_config(), &report(), &[], "What happened?")
+            .await
+            .unwrap();
+
+        assert!(service.summary(date()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_conversation_so_far_goes_back_with_the_question() {
+        let server = FakeHttp::serving(200, &answer("The afternoon.")).await;
+        point_cloud_at(&server.base_url());
+
+        let temp = tempfile::tempdir().unwrap();
+        let service = InferenceService::in_dir(temp.path()).unwrap();
+
+        let turns = [ChatTurn {
+            asked: "What took the morning?".into(),
+            answered: "The collector.".into(),
+        }];
+        service
+            .chat(&cloud_config(), &report(), &turns, "And after that?")
+            .await
+            .unwrap();
+
+        let sent = server.last_request();
+        assert!(sent.contains("The collector."), "{sent}");
+        assert!(sent.contains("And after that?"), "{sent}");
+    }
+
+    /// The same gate as the summaries, because it is the same model and the same key.
+    #[tokio::test]
+    async fn nothing_is_asked_of_a_cloud_provider_without_consent() {
+        let server = FakeHttp::serving(200, &answer("Never sent.")).await;
+        point_cloud_at(&server.base_url());
+
+        let temp = tempfile::tempdir().unwrap();
+        let service = InferenceService::in_dir(temp.path()).unwrap();
+
+        let mut config = cloud_config();
+        config.inference.cloud_consent = false;
+
+        let error = service
+            .chat(&config, &report(), &[], "What happened?")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, InferenceError::ConsentMissing), "{error}");
+        assert_eq!(server.request_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_empty_question_is_refused_before_anything_is_sent() {
+        let server = FakeHttp::serving(200, &answer("Never sent.")).await;
+        point_cloud_at(&server.base_url());
+
+        let temp = tempfile::tempdir().unwrap();
+        let service = InferenceService::in_dir(temp.path()).unwrap();
+
+        let error = service
+            .chat(&cloud_config(), &report(), &[], "   ")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("no question"), "{error}");
+        assert_eq!(server.request_count(), 0);
     }
 
     #[test]

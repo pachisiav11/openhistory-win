@@ -452,6 +452,7 @@ pub fn run() {
             summaries::day_summary,
             summaries::summarize_day,
             summaries::summarize_hour,
+            summaries::chat_about_day,
             summaries::forget_summary,
             summaries::local_server_status,
             summaries::stop_local_server,

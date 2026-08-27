@@ -13,6 +13,7 @@ use oh_core::{CloudModelChoice, Config, DaySummary, HourSummary, InferenceProvid
 use oh_inference::catalog::{self, ModelStatus};
 use oh_inference::download::{Cancel, Progress, ProgressListener};
 use oh_inference::llama::LlamaStatus;
+use oh_inference::prompt::ChatTurn;
 use oh_inference::secrets::{self, SECRETS, Secret};
 use oh_inference::service::{InferenceService, Readiness, RunReport};
 use oh_processing::DayReport;
@@ -479,6 +480,42 @@ pub async fn summarize_hour(
         .summarize_hour(&config, &report, hour)
         .await
         .map_err(to_message)
+}
+
+/// One answer from the summariser, with the provenance the transcript shows beside it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatReply {
+    pub text: String,
+    /// The model that answered, so an answer written by one model is not read as
+    /// having come from the model now selected.
+    pub model: String,
+}
+
+/// Ask the summariser about a day.
+///
+/// The transcript is passed in rather than held here. Nothing about the conversation
+/// is written to disk: a summary is a document a person keeps, and a question they
+/// asked about a Tuesday afternoon is not.
+#[tauri::command]
+pub async fn chat_about_day(
+    date: String,
+    question: String,
+    turns: Vec<ChatTurn>,
+    app: State<'_, AppState>,
+    state: State<'_, SummaryState>,
+) -> Result<ChatReply, String> {
+    let (config, report) = prepare(&date, &app)?;
+    let completion = state
+        .service
+        .chat(&config, &report, &turns, &question)
+        .await
+        .map_err(to_message)?;
+
+    Ok(ChatReply {
+        text: completion.text,
+        model: completion.model,
+    })
 }
 
 #[tauri::command]

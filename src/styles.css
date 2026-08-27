@@ -476,6 +476,60 @@ body {
   margin-bottom: 0;
 }
 
+/* ── Asking about a day ─────────────────────────────────────────────────────── */
+
+/* Not chat bubbles. The question is a quiet line and the answer is prose, so a
+   conversation reads like the rest of the interface rather than like a messenger. */
+.chat {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.chat__turn {
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+}
+
+.chat__asked {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.chat__answered {
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.chat__answered p {
+  margin: 0 0 10px;
+}
+
+.chat__answered p:last-child {
+  margin-bottom: 0;
+}
+
+.chat__by {
+  margin: 8px 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.chat__ask {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.chat__ask .input {
+  flex: 1;
+  min-width: 0;
+}
+
 .notice--ok {
   background: #10241a;
   border: 1px solid #1f4a33;

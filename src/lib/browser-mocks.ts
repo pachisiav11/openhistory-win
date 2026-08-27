@@ -164,6 +164,23 @@ function sampleEpisodes(): Episode[] {
       eventCount: 2,
       isPrivate: false,
     },
+    {
+      // Half a minute, so the preview shows a day with a window that was touched
+      // rather than worked in: it is counted in the totals and left out of the list.
+      id: `${localToday()}#5`,
+      date: localToday(),
+      app: "Calculator",
+      appPath: String.raw`C:\Windows\System32\calc.exe`,
+      title: "Calculator",
+      titles: ["Calculator"],
+      urls: [],
+      start: minutesAgo(2),
+      end: minutesAgo(1),
+      durationMs: 30_000,
+      activeMs: 30_000,
+      eventCount: 1,
+      isPrivate: false,
+    },
   ];
 }
 
@@ -646,6 +663,24 @@ export function installBrowserMocks(): void {
       hoursSkipped: [],
       hoursTooQuiet: [],
       dailyWritten: true,
+    };
+  });
+
+  mockCommand("chat_about_day", (args) => {
+    const asked = String(args?.question ?? "");
+    const turns = (args?.turns ?? []) as { asked: string }[];
+    const leader = report().rollup.apps[0];
+    return {
+      text:
+        `You asked: ${asked}\n\n` +
+        (leader
+          ? `The day's longest stretch was ${leader.app}, ${Math.round(leader.activeMs / 60_000)} ` +
+            "minutes of it, on the collector. The Win32 accessibility documentation was open " +
+            "for eight minutes after it, which the log does not connect to the editing either " +
+            "way."
+          : "The log has nothing recorded for this day.") +
+        (turns.length > 0 ? `\n\nThat is ${turns.length + 1} questions so far.` : ""),
+      model: config.inference.cloudModel,
     };
   });
 
