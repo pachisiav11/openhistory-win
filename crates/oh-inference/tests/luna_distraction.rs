@@ -139,7 +139,7 @@ async fn luna_answers_how_distracted_the_evening_was() {
         eprintln!("{answer}\n");
 
         let path = out.join(format!("{}.md", variant.slug));
-        fs::write(&path, page(variant, &prompt, &answer)).expect("the draft is written");
+        fs::write(&path, page(variant, &answer)).expect("the draft is written");
         written.push(path);
     }
 
@@ -229,13 +229,18 @@ fn evening_report(day: &DayReport) -> DayReport {
     }
 }
 
-fn build(report: &DayReport, variant: &Variant) -> Prompt {
-    let date = NaiveDate::parse_from_str(&report.date, "%Y-%m-%d").expect("a date");
-    let question = if variant.steer.is_empty() {
+/// The question this variant puts, steer and all.
+fn asked(variant: &Variant) -> String {
+    if variant.steer.is_empty() {
         QUESTION.to_owned()
     } else {
         format!("{QUESTION}\n\n{}", variant.steer)
-    };
+    }
+}
+
+fn build(report: &DayReport, variant: &Variant) -> Prompt {
+    let date = NaiveDate::parse_from_str(&report.date, "%Y-%m-%d").expect("a date");
+    let question = asked(variant);
     let mut prompt = chat_prompt(
         date,
         report,
@@ -248,7 +253,7 @@ fn build(report: &DayReport, variant: &Variant) -> Prompt {
 }
 
 /// One draft, with enough around it to judge it by.
-fn page(variant: &Variant, prompt: &Prompt, answer: &str) -> String {
+fn page(variant: &Variant, answer: &str) -> String {
     format!(
         "# Draft {}\n\n\
 **What this framing is for.** {}\n\n\
@@ -266,13 +271,7 @@ fn page(variant: &Variant, prompt: &Prompt, answer: &str) -> String {
             "the evening only"
         },
         answer.trim(),
-        prompt
-            .user
-            .lines()
-            .last()
-            .unwrap_or(QUESTION)
-            .trim()
-            .replace('\n', "\n> "),
+        asked(variant).trim().replace('\n', "\n> "),
     )
 }
 
