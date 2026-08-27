@@ -178,8 +178,13 @@ cargo test -p oh-inference --test luna_distraction -- --ignored --nocapture
 
 Run on this tree and passing: `cargo fmt --all -- --check`, `cargo clippy --workspace
 --all-targets -- -D warnings`, `cargo test --workspace` (355 passed, 0 failed),
-`npx tsc --noEmit`. The release binary was built with `npm run tauri build --
---no-bundle`.
+`npx tsc --noEmit`. The release binary rebuilt clean with `npm run tauri build --
+--no-bundle`: `target/release/openhistory-win.exe`, 2026-08-28 00:41.
+
+Pushed to `origin/attention-and-distraction`, two commits, branched off `main` rather
+than committed to it. Open a pull request or merge it locally, whichever you prefer:
+
+    https://github.com/pachisiav11/openhistory-win/pull/new/attention-and-distraction
 
 `npm test` and the browser pass were **not** run: nothing here touches the frontend
 beyond one corrected comment, and you asked for no testing. The two ignored desktop
