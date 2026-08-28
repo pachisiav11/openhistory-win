@@ -27,6 +27,15 @@
 //! the foreground and whether the work resumed, which is why a thread reports its
 //! partner and its interruptions separately from the raw switch count. The judgement is
 //! left to the reader of the numbers.
+//!
+//! There is one deliberate simplification: what counts as an interruption is decided
+//! purely by whether the work comes back within [`LOOKAHEAD`] visits, with no separate
+//! cap on how long the interrupting visit itself ran. An earlier version also required
+//! the interrupting time to stay under a cap of its own, on the reasoning that a long
+//! enough departure is the thing being done rather than a pause in something else. That
+//! is a real distinction, but it is a second question layered on the first one, and
+//! `resumes` alone already answers the question a summary actually needs: did the
+//! person come back to this.
 
 use std::collections::BTreeMap;
 
@@ -35,32 +44,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::episode::Episode;
 
-/// The least time a single visit must hold to be a stay rather than a passage.
-///
-/// Below this the window was crossed, not used: alt-tab landing somewhere on the way to
-/// somewhere else. Used only to band the visits for reporting, never to discard them.
-pub const GLANCE_MS: i64 = 10_000;
-
-/// The least time a visit must hold to be a settled one.
-///
-/// The old naming floor, kept because the band it marks is still worth reporting — but
-/// no longer a filter, for the reason in the module note.
-pub const SETTLED_MS: i64 = 60_000;
-
 /// The least active time a thread must hold before it is worth naming.
 ///
-/// Applied to the whole piece of work rather than to any one visit inside it. Ten
-/// seconds in Windows Terminal is a thread of ten seconds and stays unnamed; a hundred
-/// four-second returns to one document is a thread of half an hour and is named.
-pub const MIN_THREAD_MS: i64 = 60_000;
-
-/// The longest a foreground visit by an outsider can be and still count as an
-/// interruption of a thread rather than the end of it.
-///
-/// Two minutes is the point where whatever took the foreground stopped being a glance
-/// aside and became the thing being done. A thread that survives it would report a
-/// person as still writing when they had moved on.
-const MAX_INTERRUPTION_MS: i64 = 120_000;
+/// Applied to the whole piece of work rather than to any one visit inside it. Five
+/// seconds is low enough that almost anything with a second crossing back to it clears
+/// the bar; what actually keeps noise out is [`MIN_COUPLING`] deciding which windows
+/// were a pair in the first place; and [`resumes`] deciding whether a stray visit
+/// belongs to the thread at all.
+pub const MIN_THREAD_MS: i64 = 5_000;
 
 /// How far ahead to look when deciding whether a new application belongs to the work in
 /// progress or is a visitor to it.
@@ -105,8 +96,6 @@ pub struct AppAttention {
     /// The longest single visit. The distance between this and `active_ms` is the
     /// difference between a sitting and an accumulation.
     pub longest_visit_ms: i64,
-    /// How many of the visits ran a minute or longer.
-    pub settled_visits: usize,
 }
 
 /// Two applications that kept handing the foreground to one another.
@@ -210,16 +199,6 @@ pub struct Attention {
     /// Handovers from one application to a different one.
     pub switches: usize,
     pub distinct_apps: usize,
-    /// Active time in visits under ten seconds: windows crossed, not used.
-    pub passing_ms: i64,
-    /// Active time in visits between ten seconds and a minute. Where shuttled work
-    /// lives, and where a duration floor does its damage.
-    pub brief_ms: i64,
-    /// Active time in visits of a minute or longer.
-    pub settled_ms: i64,
-    pub passing_visits: usize,
-    pub brief_visits: usize,
-    pub settled_visits: usize,
     /// Applications by time held, longest first.
     pub apps: Vec<AppAttention>,
     /// The pairs that traded the foreground most, most first.
@@ -252,8 +231,8 @@ impl Attention {
     /// The share of active time that went into threads long enough to be named, 0 to 1.
     ///
     /// The honest replacement for counting long visits. Work shuttled across two
-    /// windows in ten-second bursts is in here, because the thread it belongs to is
-    /// long even though none of its visits were.
+    /// windows in short bursts is in here, because the thread it belongs to is long
+    /// even though none of its visits were.
     pub fn threaded_share(&self) -> f64 {
         if self.active_ms <= 0 {
             return 0.0;
@@ -298,16 +277,6 @@ pub fn measure(episodes: &[&Episode]) -> Attention {
 
     for (position, episode) in episodes.iter().enumerate() {
         attention.active_ms += episode.active_ms;
-        if episode.active_ms < GLANCE_MS {
-            attention.passing_ms += episode.active_ms;
-            attention.passing_visits += 1;
-        } else if episode.active_ms < SETTLED_MS {
-            attention.brief_ms += episode.active_ms;
-            attention.brief_visits += 1;
-        } else {
-            attention.settled_ms += episode.active_ms;
-            attention.settled_visits += 1;
-        }
 
         let usage = apps
             .entry(episode.app.clone())
@@ -316,14 +285,10 @@ pub fn measure(episodes: &[&Episode]) -> Attention {
                 visits: 0,
                 active_ms: 0,
                 longest_visit_ms: 0,
-                settled_visits: 0,
             });
         usage.visits += 1;
         usage.active_ms += episode.active_ms;
         usage.longest_visit_ms = usage.longest_visit_ms.max(episode.active_ms);
-        if episode.active_ms >= SETTLED_MS {
-            usage.settled_visits += 1;
-        }
 
         if let Some(previous) = position.checked_sub(1).map(|before| episodes[before]) {
             if previous.app != episode.app {
@@ -408,9 +373,8 @@ pub fn between_hours(episodes: &[Episode], from_hour: u32, to_hour: u32) -> Vec<
 ///
 /// The second pass walks the stream with each episode labelled by its pair, and cuts a
 /// new thread wherever the label changes for good. A window that takes the foreground
-/// and gives it back within [`LOOKAHEAD`] visits is an interruption; one that keeps it,
-/// or holds it past [`MAX_INTERRUPTION_MS`] in total, ends the thread and starts the
-/// next.
+/// and gives it back within [`LOOKAHEAD`] visits is an interruption of the thread;
+/// anything else ends it and starts the next.
 pub fn threads(episodes: &[&Episode]) -> Vec<Thread> {
     let partner = pair_up(episodes);
     let labels: Vec<String> = episodes
@@ -420,10 +384,6 @@ pub fn threads(episodes: &[&Episode]) -> Vec<Thread> {
 
     let mut built: Vec<Thread> = Vec::new();
     let mut current: Option<Builder> = None;
-    // Time spent away from the thread since it was last worked in. Consecutive, so a
-    // stretch broken into ten times by six seconds each survives and one broken into
-    // once for three minutes does not.
-    let mut away_ms: i64 = 0;
 
     for (position, episode) in episodes.iter().enumerate() {
         let label = &labels[position];
@@ -440,29 +400,23 @@ pub fn threads(episodes: &[&Episode]) -> Vec<Thread> {
 
         let Some(builder) = current.as_mut() else {
             current = Some(Builder::new(episode, label.clone()));
-            away_ms = 0;
             continue;
         };
 
         if &builder.label == label {
             builder.take(episode);
-            away_ms = 0;
             continue;
         }
 
-        // An outsider. It interrupted the work if the work resumes shortly and the time
-        // away has not itself become the thing being done.
-        if away_ms + episode.active_ms <= MAX_INTERRUPTION_MS
-            && resumes(&labels, position, &builder.label)
-        {
+        // An outsider. It interrupted the work if the work resumes shortly; otherwise
+        // it is the end of this thread and the start of whatever is next.
+        if resumes(&labels, position, &builder.label) {
             builder.interrupt(episode);
-            away_ms += episode.active_ms;
             continue;
         }
 
         built.push(current.take().expect("a builder was in hand").finish());
         current = Some(Builder::new(episode, label.clone()));
-        away_ms = 0;
     }
 
     if let Some(builder) = current {
@@ -725,16 +679,21 @@ mod tests {
         assert_eq!(work.crossings, 199);
         assert!(work.is_shuttle());
         assert_eq!(work.apps.len(), 2);
-        // Not one second of it was in a visit long enough for the old floor to keep.
-        assert_eq!(measured.settled_ms, 0);
         assert!((measured.threaded_share() - 1.0).abs() < f64::EPSILON);
     }
 
-    /// The bug the old floor was written to fix, which must stay fixed.
+    /// A visit under the five-second floor is still not a stretch of work on its own.
     #[test]
-    fn a_few_seconds_in_one_window_is_not_a_stretch_of_work() {
-        let episodes = sequence(vec![visit(0, "Windows Terminal", 10)]);
+    fn a_couple_of_seconds_in_one_window_is_not_a_stretch_of_work() {
+        let episodes = sequence(vec![visit(0, "Windows Terminal", 3)]);
         assert!(measure_all(&episodes).threads.is_empty());
+    }
+
+    /// Five seconds clears the floor now that it sits at five seconds rather than sixty.
+    #[test]
+    fn five_seconds_in_one_window_is_a_stretch_of_work() {
+        let episodes = sequence(vec![visit(0, "Windows Terminal", 5)]);
+        assert_eq!(measure_all(&episodes).threads.len(), 1);
     }
 
     /// A window that takes the foreground and gives it back is an interruption: counted
@@ -755,10 +714,10 @@ mod tests {
         assert_eq!(work.interrupted_ms(), 15_000);
     }
 
-    /// A window that takes the foreground and keeps it has ended the work rather than
-    /// interrupted it, however alike the two look at the moment of the switch.
+    /// A window that takes the foreground and does not come back within `LOOKAHEAD`
+    /// visits has ended the work rather than interrupted it, however long it ran for.
     #[test]
-    fn a_window_that_keeps_the_foreground_ends_the_stretch() {
+    fn a_window_that_does_not_come_back_soon_ends_the_stretch() {
         let mut episodes = shuttle(20, "Microsoft Word", "Markdown Renderer", 20);
         episodes.push(visit(100, "Google Chrome", 600));
         let measured = measure_all(&sequence(episodes));
@@ -850,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn the_bands_split_the_time_by_how_long_each_visit_held() {
+    fn switches_are_counted_between_consecutive_different_applications() {
         let episodes = sequence(vec![
             visit(0, "A", 5),
             visit(1, "B", 30),
@@ -858,9 +817,7 @@ mod tests {
         ]);
         let measured = measure_all(&episodes);
 
-        assert_eq!(measured.passing_ms, 5_000);
-        assert_eq!(measured.brief_ms, 30_000);
-        assert_eq!(measured.settled_ms, 300_000);
+        assert_eq!(measured.active_ms, 335_000);
         assert_eq!(measured.switches, 2);
     }
 

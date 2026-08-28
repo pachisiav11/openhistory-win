@@ -310,10 +310,15 @@ are not evidence about one. Where an entry reports what was on screen, that is \
 evidence like any other: use it to say what a document, page or conversation was \
 about, from the words recorded and never from what a name like that usually means. Do \
 not characterize the day in general terms — no \"a productive session\", no \"a mix of \
-tasks\". Answer at whatever length the question takes: a question about one moment \
-wants a sentence, and one about the shape of the day wants a paragraph. Write prose, \
-with no headings and no preamble. The person asking is the person the log is about, so \
-write to them as \"you\".\n\n\
+tasks\". Write prose, with no headings and no preamble. The person asking is the \
+person the log is about, so write to them as \"you\".\n\n\
+Open with a direct answer to the question actually asked, in one plain sentence, \
+before any of the evidence — then spend the rest of the answer, at whatever length the \
+question takes, on what in the log supports that opening sentence. A question about \
+one moment wants a short answer and little evidence after it; a question about the \
+shape of the day wants a longer one. The opening sentence is a reading of the log, not \
+a judgement of the person: state it plainly, without softening it into a list of \
+caveats and without praising or blaming — say what happened, not whether it was good.\n\n\
 Questions about focus, distraction and switching are answered from the measurements in \
 the log and from nothing else. The counts are given to you: use them, quote them, and \
 never estimate a number of your own. Switching is not distraction by itself. A stretch \
@@ -323,13 +328,13 @@ pair, however many hundred times, is one piece of work and must be described as 
 log marks these stretches for you and counts the crossings inside them; what it lists \
 separately, as an interruption, is a window that took the foreground away from a stretch \
 and handed it back. Those are the two things a question about distraction is really \
-asking you to tell apart, so tell them apart explicitly: say what the person was actually \
-doing, say what broke into it and how often, and say whether the work resumed. Where the \
-evidence allows both readings, give both and say which it favours and why. Do not deliver \
-a verdict on the person and do not grade them; report what the switching shows, including \
-when it shows a stretch that held. A number alone is not an answer — a hundred crossings \
-between a draft and its source is concentration, and six departures to something \
-unrelated may not be.";
+asking you to tell apart, so tell them apart explicitly in the opening sentence itself: \
+say plainly how distracted the person was, and then say what broke in, how often, and \
+whether the work resumed. Where the evidence allows both readings, open with the one it \
+favours and say why. A number alone is not an answer — a hundred crossings between a \
+draft and its source is concentration, and six departures to something unrelated may \
+not be — so the opening sentence must already reflect that distinction rather than \
+leaving it for the evidence to sort out.";
 
 /// One exchange already in the conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -799,17 +804,10 @@ active time. The average visit lasted {}.",
         human_duration(attention.mean_visit_ms()),
     );
 
-    block.push_str(&format!(
-        " By length of visit: {} in visits under ten seconds, {} in visits of ten \
-seconds to a minute, {} in visits of a minute or more.",
-        human_duration(attention.passing_ms),
-        human_duration(attention.brief_ms),
-        human_duration(attention.settled_ms),
-    ));
-
-    // The sentence that stops the bands being read as a verdict. Work carried across
-    // two windows is made of short visits by construction, and a reader given only the
-    // bands would call half an hour of writing a half hour of distraction.
+    // The sentence that stops a low mean visit length being read as a verdict on its
+    // own. Work carried across two windows is made of short visits by construction, and
+    // a reader given only that number would call half an hour of writing a half hour of
+    // distraction.
     block.push_str(&format!(
         " A short visit is not the same as a short piece of work: {:.0}% of the active \
 time belonged to one of the stretches listed above, which are what the time was \
@@ -1043,6 +1041,9 @@ mod tests {
 
     #[test]
     fn a_very_busy_hour_is_truncated_and_says_so() {
+        // Forty different applications, none paired with another, so each 30-second
+        // visit is a one-window thread of its own: forty threads, truncated the same
+        // way forty loose episodes used to be.
         let episodes: Vec<Episode> = (0..40)
             .map(|n| episode(&format!("App{n}"), Some("something"), 30_000))
             .collect();
@@ -1050,7 +1051,11 @@ mod tests {
         let ids: Vec<&str> = episodes.iter().map(|e| e.id.as_str()).collect();
 
         let prompt = hour_prompt(date(), &hour(1_200_000, &ids), &refs).unwrap();
-        assert!(prompt.user.contains("15 further entries omitted"));
+        assert!(
+            prompt.user.contains("15 further stretches omitted"),
+            "{}",
+            prompt.user
+        );
         assert!(prompt.user.contains("App0"));
         assert!(!prompt.user.contains("App39"));
     }
@@ -1449,5 +1454,17 @@ mod tests {
         assert!(CHAT_SYSTEM.contains("Switching is not distraction by itself"));
         assert!(CHAT_SYSTEM.contains("never estimate a number of your own"));
         assert!(SYSTEM.contains("crossing between such a pair"));
+    }
+
+    /// A plain question, with no steer appended, must still get a direct answer up
+    /// front. This is the whole point of the instruction: a user asking "how
+    /// distracted was I" should not have to phrase the question a particular way to
+    /// get a verdict rather than a recitation.
+    #[test]
+    fn the_chat_system_prompt_asks_for_a_direct_answer_before_the_evidence() {
+        assert!(CHAT_SYSTEM.contains("Open with a direct answer to the question"));
+        assert!(CHAT_SYSTEM.contains("before any of the evidence"));
+        assert!(CHAT_SYSTEM.contains("not a judgement of the person"));
+        assert!(CHAT_SYSTEM.contains("say plainly how distracted the person was"));
     }
 }

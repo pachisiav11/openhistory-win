@@ -1,20 +1,33 @@
 # Handoff — attention and distraction
 
-Written 2026-08-27 in the evening, before the work started, and rewritten at the end of
-it on 2026-08-28. This covers one task only: making the summaries and the day chat able
-to say something true about how scattered a stretch of work was. The project-wide
-handoff is `HANDOFF.md` and is unchanged by this.
+Written 2026-08-27 in the evening, before the work started; rewritten at the end of the
+first pass on 2026-08-28 morning; rewritten again the same day after you picked a
+draft and asked for the framing to be simplified further. This covers one task only:
+making the summaries and the day chat able to say something true about how scattered a
+stretch of work was. The project-wide handoff is `HANDOFF.md` and is unchanged by this.
 
 Read "The finding that shaped it" first. It is the reason the change is larger than a
 prompt edit, and if it is ever undone the feature quietly stops working while still
 appearing to.
 
-## Where to pick up
+## Where things stand
 
-**Five drafts are waiting in `drafts/luna-distraction/`.** Read that directory's
-`README.md`, then the five numbered files, and say which framing you want. Draft 1 is
-the control — exactly what the app sends today — so if it wins, nothing more is needed.
-Otherwise tell me the number and I will make the app send that framing.
+You picked **draft 2, verdict-first**, and asked for that framing to come out of a
+bare question with no per-request steering. It is no longer a draft — `CHAT_SYSTEM` in
+`prompt.rs` was rewritten so the chat always opens with a plain one-sentence verdict
+before the evidence, unprompted. Asking the day-chat exactly *"How distracted was I
+while working on the critical in the evening today?"* now gets that shape by default.
+
+You then asked for the measurement itself to be simplified: keep the pairing threshold,
+drop the floor to five seconds, and remove the glance/settled bands and the cap on how
+long an interruption is allowed to run. That is done too — see "What changed after the
+first pass" below.
+
+`drafts/luna-distraction/` still holds five regenerated answers, now produced against
+the simplified measurement and the baked-in verdict-first prompt, for your own
+reference. There is nothing left to choose between them for — they were regenerated to
+confirm the shipped framing still reads well under the new numbers, not to pick a
+winner again.
 
 The drafts are **not committed**. They quote window titles, document names and screen
 text from your own log, and this repository has a GitHub remote, so `/drafts` went into
@@ -80,12 +93,13 @@ moves, which means the thing the floor was being applied to is not a unit of wor
 
 Measurement, not judgement. Two things live here.
 
-**Bands and counts.** `Attention` carries active time and visit counts split three ways
-— under ten seconds (a window crossed on the way somewhere), ten seconds to a minute,
-and a minute or more — plus switches, switches per hour of *active* time, distinct
-applications, per-application visit patterns, and the top alternating pairs. A pair is
-counted in both directions and reported once, because a person shuttling between a
-document and its source crosses both ways and neither direction is the interesting one.
+**Counts.** `Attention` carries active time, visits, switches, switches per hour of
+*active* time, distinct applications, per-application visit patterns (`AppAttention`),
+and the top alternating pairs. A pair is counted in both directions and reported once,
+because a person shuttling between a document and its source crosses both ways and
+neither direction is the interesting one. (The first pass split this by how long each
+visit ran — under ten seconds, ten seconds to a minute, a minute or more. That banding
+was removed in the second pass; see "What changed after the first pass".)
 
 **Threads.** The unit the prompts now name. A `Thread` is a continuous piece of work
 carried out in one or two windows.
@@ -104,13 +118,15 @@ essay appeared nowhere. That is why `pair_up` is a separate pass, and there is a
 named `an_application_is_paired_with_whichever_it_crossed_with_most` holding it there.
 
 A window that takes the foreground and gives it back within six visits is an
-`Interruption`; one that keeps it, or holds it past two minutes of consecutive time
-away, ends the thread. A gap of more than fifteen minutes ends it regardless.
+`Interruption`; one that keeps it ends the thread. A gap of more than fifteen minutes
+ends it regardless. (The first pass also ended a thread if the interrupting time
+exceeded two consecutive minutes, regardless of whether it came back. That cap was
+removed in the second pass — see below.)
 
-The floor — `MIN_THREAD_MS`, still 60 seconds — is applied to the finished thread. Ten
-seconds in Windows Terminal is a thread of ten seconds and is still dropped, so the
-original bug stays fixed. A hundred four-second returns to one document is a thread of
-half an hour and is named.
+The floor — `MIN_THREAD_MS`, now 5 seconds, was 60 — is applied to the finished thread.
+A thread below the floor is still dropped, so the original bug (Windows Terminal
+touched for ten seconds reported as five minutes of command-line work) stays fixed. A
+hundred four-second returns to one document is a thread of half an hour and is named.
 
 A thread carries `crossings`, `interruptions` (with counts, time and title), `span_ms`
 against `active_ms`, and `mean_uninterrupted_ms` — the number that says whether a
@@ -119,12 +135,15 @@ stretch could be thought in.
 `between_hours` slices a day by local hour, so "the evening" is answerable without
 making a model do arithmetic on timestamps.
 
-**On the real evening, before and after:**
+**On the real evening, before and after the first pass:**
 
 | | before | after |
 |---|---|---|
-| share of active time inside a named stretch | 32% | **81%** |
+| share of active time inside a named stretch | 32% | 81% |
 | the essay | absent | 19:46–20:26, Word with Markdown Renderer, 33m, 196 crossings, broken into 57 |
+
+That 81% and 57 are from the 60-second floor with the two-minute interruption cap. The
+current numbers, after removing both, are in "What changed after the first pass".
 
 ### `crates/oh-inference/src/prompt.rs`, changed
 
@@ -147,6 +166,50 @@ making a model do arithmetic on timestamps.
 The rule that the model may not invent a mood, purpose or urgency is untouched, and the
 new instructions sit inside it rather than around it.
 
+## What changed after the first pass
+
+Two rounds of feedback landed after the drafts went out.
+
+**The verdict-first framing was baked in.** You liked draft 2 best, but you didn't want
+to steer for it per request — you wanted the bare question, exactly as the app already
+sends it, to come out reading that way. `CHAT_SYSTEM` was rewritten with a new opening
+instruction: answer with one plain sentence of verdict before any evidence, and for a
+distraction question that sentence must itself say how distracted the person was and
+what broke in, rather than leaving the reader to work it out from a paragraph of
+numbers. `SYSTEM` was left as it was; only the interactive chat prompt needed this,
+since the day-chat is where a bare question like this one arrives. Covered by
+`the_chat_system_prompt_asks_for_a_direct_answer_before_the_evidence`.
+
+**The measurement was simplified**, on explicit instruction to keep the pairing
+threshold and drop the rest: `MIN_THREAD_MS` from 60 seconds to 5, and `GLANCE_MS`,
+`SETTLED_MS` and `MAX_INTERRUPTION_MS` deleted along with the banding and the
+interruption-length cap they drove. `MIN_COUPLING` (4 crossings) is untouched — see
+"Worth knowing" for why it didn't need to move.
+
+One consequence worth flagging rather than quietly shipping: without a cap on how long
+an interruption is allowed to run, a long visit elsewhere can now be folded into a
+thread as an "interruption" as long as it eventually comes back, rather than ending
+the thread and standing as its own stretch. On the real evening this happened once — a
+four-minute visit to Settings, previously its own standalone thread, is now counted as
+an interruption of the surrounding Claude/Chrome thread — and it is the reason the
+share of active time inside a named stretch reads lower now (72%) than it did under the
+capped version (81%): that time moved from a thread's own active time into another
+thread's interruption time, which the model is told about but which doesn't count
+toward "time spent working." This is the direct, intended effect of the simplification
+you asked for, not a defect, but it is the one place where "no cap" trades away
+something the cap used to catch.
+
+Re-measured on the same evening after both changes:
+
+| | after 60s floor + 2min cap | after 5s floor, no cap |
+|---|---|---|
+| share of active time inside a named stretch | 81% | 72% |
+| the essay | 19:46–20:26, 33m, 196 crossings, broken into 57 | 19:48–20:26, 31m, 194 crossings, broken into 55 |
+| stretches found in the evening | not counted this way | 10 |
+
+The essay itself is barely changed — this is the same finding holding up under a
+different edge policy, not a different finding.
+
 ### `src/views/DayView.tsx`, comment only
 
 `MIN_APP_MS` there is a floor on a whole day's use of one application, not on an
@@ -160,10 +223,10 @@ changed.
 `crates/oh-inference/tests/luna_distraction.rs`, ignored by default so a normal
 `cargo test` never spends money or needs a key. Two tests:
 
-- `the_evening_measures_as_expected` needs no key and costs nothing. It prints the
-  bands, the switch rate and every thread found. This is the fastest way to see whether
-  the threading is finding the work, and it is where the 270-interruption bug showed
-  itself.
+- `the_evening_measures_as_expected` needs no key and costs nothing. It prints active
+  time, switches, switches per hour, the threaded share and every thread found. This is
+  the fastest way to see whether the threading is finding the work, and it is where the
+  270-interruption bug showed itself.
 - `luna_answers_how_distracted_the_evening_was` asks Luna the question five ways and
   writes the answers to `drafts/luna-distraction/`.
 
@@ -176,20 +239,30 @@ cargo test -p oh-inference --test luna_distraction -- --ignored --nocapture
 
 ## State at the end
 
-Run on this tree and passing: `cargo fmt --all -- --check`, `cargo clippy --workspace
---all-targets -- -D warnings`, `cargo test --workspace` (355 passed, 0 failed),
-`npx tsc --noEmit`. The release binary rebuilt clean with `npm run tauri build --
---no-bundle`: `target/release/openhistory-win.exe`, 2026-08-28 00:41.
+Also resolved this round: you asked to give the summariser chat context of past
+messages. Traced the whole path — `DayView.tsx` to `chatAboutDay` to the
+`chat_about_day` Tauri command to `InferenceService::chat` to the "Earlier in this
+conversation" block `chat_prompt` already builds — and confirmed the interactive
+day-chat already carries the last `MAX_CHAT_TURNS` (8) exchanges forward on every
+question. You confirmed that's what you meant and no change was needed, so none was
+made. The other reading — giving the automatic hour/day write-up visibility into a
+chat that happened separately — was not what was meant; noted here so it isn't
+re-investigated from scratch if it comes up again.
 
-Pushed to `origin/attention-and-distraction`, two commits, branched off `main` rather
-than committed to it. Open a pull request or merge it locally, whichever you prefer:
+Run on this tree and passing, this round: `cargo fmt --all -- --check`, `cargo clippy
+--workspace --all-targets -- -D warnings`, `cargo test --workspace` (357 passed, 0
+failed, 14 ignored — the desktop-gate and paid-API tests), `npx tsc --noEmit`. The
+release binary rebuilt clean with `npm run tauri build -- --no-bundle`:
+`target/release/openhistory-win.exe`.
+
+Pushed to `origin/attention-and-distraction`, branched off `main` rather than committed
+to it. Open a pull request or merge it locally, whichever you prefer:
 
     https://github.com/pachisiav11/openhistory-win/pull/new/attention-and-distraction
 
-`npm test` and the browser pass were **not** run: nothing here touches the frontend
-beyond one corrected comment, and you asked for no testing. The two ignored desktop
-gates, `live_desktop` and `persistence`, were not run either — nothing here touches the
-collector.
+`npm test` and the browser pass were **not** run: nothing this round touches the
+frontend at all. The two ignored desktop gates, `live_desktop` and `persistence`, were
+not run either — nothing here touches the collector.
 
 **The app was not reinstalled.** Built and pushed, per your standing preference that
 the reinstall is yours. `target/release/openhistory-win.exe` is the new binary; the
@@ -197,13 +270,24 @@ installer hang in `todo.md` is untouched.
 
 ### Worth knowing
 
-- The `57` interruptions inside the essay stretch are the real distraction signal, and
-  they were invisible before this. Claude 18 times, Windows Explorer 18, Google
-  Calendar in Chrome 13, leaving about 34 seconds of work between one and the next.
-- `MIN_COUPLING` is 4 crossings. On this evening the real pair crossed 188 times and
-  the next pair down crossed 9, so the threshold is nowhere near anything real. If a
-  day ever pairs two windows that were not coupled, that is the constant to look at.
-- Writing to `prompt.rs` through a shell heredoc mangles backslashes, which silently
-  broke one edit and left `SYSTEM` unchanged while reporting success. Anything with a
-  Rust line continuation in it should be written to a file and spliced by line number,
-  not pattern-matched through a shell.
+- The interruptions inside the essay stretch are the real distraction signal, and they
+  were invisible before this work. 55 of them now (57 under the old cap), Claude and
+  Windows Explorer the two most frequent sources, leaving about half a minute of work
+  between one and the next.
+- `MIN_COUPLING` is 4 crossings, unchanged through both passes at your instruction. On
+  this evening the real pair crossed roughly 190 times and the next pair down crossed
+  9, so the threshold is nowhere near anything real. If a day ever pairs two windows
+  that were not coupled, that is the constant to look at.
+- Removing the interruption-length cap means a long excursion can now be absorbed into
+  a thread as an interruption rather than standing as its own stretch, as long as the
+  work comes back within six visits — see "What changed after the first pass" for the
+  one case this changed on the real evening. Worth remembering if a threaded share ever
+  looks lower than expected: check whether something substantial got folded in as an
+  interruption of something else before assuming a measurement bug.
+- Writing to `prompt.rs` or `attention.rs` through a shell heredoc mangles backslashes,
+  which silently broke one edit and left `SYSTEM` unchanged while reporting success,
+  and recurred once more during the second pass. The reliable fix: write the
+  replacement block to a plain file with no shell involved, then splice it into the
+  target by exact line number with a small script that asserts the anchor line's
+  content first. Anything with a Rust line continuation in it should go through that
+  path, not a heredoc or an in-shell string replace.

@@ -172,12 +172,6 @@ async fn the_evening_measures_as_expected() {
         measured.switches_per_hour()
     );
     eprintln!(
-        "  bands: {} passing, {} brief, {} settled",
-        human_duration(measured.passing_ms),
-        human_duration(measured.brief_ms),
-        human_duration(measured.settled_ms)
-    );
-    eprintln!(
         "  {:.0}% of the time is inside a named stretch",
         measured.threaded_share() * 100.0
     );
